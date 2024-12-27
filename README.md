@@ -60,4 +60,4 @@ Once set up, AnanBot can utilize Stable Diffusion for advanced image generation 
 
 ---
 
-**Note**: The current performance of the bot is still poor and requires significant optimization for better results
+**Note**: The current performance of the bot is still poor and requires significant optimization for better results. The ChromaDB still has poor performance in queries. This might be due to clipping and truncating images to a size of 384 for ChromaDB 😆, which causes the embeddings to miss critical information. Further optimization is required to address these issues.
