@@ -38,15 +38,34 @@ MEMORY_RECALL_COUNT = 2
 
 
 # PROMPT for deciding if an image should be generated
-IMAGE_DECISION_PROMPT = """
-Based on the user's input, decide if an image should be generated.
+IMAGE_DECISION_PROMPT = """\n\n
+Based on the user's input, decide if an image needs to be generated.
 
-- If an image should be generated, respond with: "{gen} ##" followed by a few keywords describing the image.
-- If no image is needed, respond with: "{notplz}".
+If the user requests an image, respond with: {gen} followed by relevant keywords describing the image.
+If no image is needed, respond with: {no}.
+Do not include any additional text.
+Examples:
+USER: Can you show me a picture of a cat?
+BOT: {gen} cat
 
-Do not add any extra text.
+USER: Generate an image with keywords: cat, dog, bird, girl, cute.
+BOT: {gen} cat, dog, bird, girl, cute
+
+USER: I don't need an image.
+BOT: {no}
+
+USER: Hello
+BOT: {no}
+
 """
 
 
 # Stable WebUI API
 STABLE_WEBUI_API = "http://127.0.0.1:7860/sdapi/v1/txt2img"
+NEGATIVE_PROMPTS = '''
+modern, recent, old, oldest, cartoon, graphic, text, painting, crayon, graphite, abstract, glitch, 
+deformed, mutated, ugly, disfigured, long body, lowres, bad anatomy, 
+(bad hands, missing fingers, extra digit, fewer digits:1.2), cropped, 
+very displeasing, (worst quality, bad quality:1.2), bad anatomy, sketch, 
+jpeg artifacts, signature, watermark, username, simple background, conjoined, ai-generated
+'''

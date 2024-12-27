@@ -194,7 +194,18 @@ class Multimodal :
                           Otherwise, returns None.
         """
 
-        __chat = text + IMAGE_DECISION_PROMPT
+        __chat = "USER :" + text + IMAGE_DECISION_PROMPT
+
+        if '{gen}' in text:
+            print("Generate Image")
+            keywords = text.replace("{gen} ", "") if text.startswith("{gen}") else text.replace("{gen}", "")
+            image_generation = generate_image(keywords)
+            img = image_generation['images'][0]
+            assistant_message = f"generated image with the following keywords: {keywords}"
+            return {"response": assistant_message, "img": img}
+        
+
+        print("CHAT: ", __chat)
         msgs = [{'role': 'user', 'content': __chat}]
         DES_ANSWER = self.model.chat(
             image=None,
@@ -213,7 +224,7 @@ class Multimodal :
             img = image_generation['images'][0]
             assistant_message = f"generated image with the following keywords: {keywords}"
             return {"response": assistant_message, "img": img}
-        elif '{notplz}' in DES_ANSWER:
+        elif '{no}' in DES_ANSWER:
             print("Not Generate Image")
             return None
         return None
