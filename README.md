@@ -10,7 +10,7 @@ AnanBot is a flexible bot designed to automate tasks and enhance productivity. I
 
 ## Workflow
 <p align="center">
-    <img src="image.png" alt="Workflow Image">
+    <img src="content/process.png" alt="Workflow Image">
 </p>
 
 ## Installation

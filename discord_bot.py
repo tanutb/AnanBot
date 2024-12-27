@@ -2,7 +2,7 @@ from typing import Final
 import os
 from dotenv import load_dotenv
 from discord import Intents, Client, Message, File
-from responses import get_response
+from utils.responses import get_response
 import base64
 from PIL import Image
 from io import BytesIO
