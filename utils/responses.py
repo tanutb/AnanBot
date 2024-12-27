@@ -1,13 +1,14 @@
 from pydantic import BaseModel
 from typing import Optional
 import requests
+from config import MODEL_API
 
 class ChatRequest(BaseModel):
     text: str
     image_path: str = None
 
 def get_response(request: ChatRequest) -> str:
-    __API = 'http://127.0.0.1:8119/chat'
+    __API = MODEL_API
     data = {"text": request.text}
     if request.image_path:
         data["image_path"] = request.image_path

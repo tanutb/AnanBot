@@ -9,6 +9,9 @@ CHROMA_DB_PATH = "./memories/chroma.db"
 COLLECTION_NAME = "v02haha"
 HISTORY_MAXLEN = 100
 
+## API for the model
+MODEL_API = 'http://127.0.0.1:8119/chat' 
+
 
 
 ## CONTEXT_LENGTH_IMAGE is the number of previous images that will be used to generate the response
