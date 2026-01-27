@@ -1,74 +1,82 @@
-### DISCORD TOKEN ###
-DISCORD_TOKEN = '<API_TOKEN>'
+# config.py
+import os
+from dotenv import load_dotenv
+from pynput import keyboard
 
-######## MODEL CONFIG ########
-OCR_LANGUAGES = ['en']
-CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
-MODEL_NAME = 'openbmb/MiniCPM-Llama3-V-2_5-int4'
-CHROMA_DB_PATH = "./memories/chroma.db"
-COLLECTION_NAME = "v02haha"
-HISTORY_MAXLEN = 100
+# Load environment variables from .env file
+load_dotenv()
 
-## API for the model
-MODEL_API = 'http://127.0.0.1:8119/chat' 
+# Ollama API Configuration
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat")
+# The name of the multimodal model to use with Ollama (e.g., "llava", "moondream")
+OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "blaifa/InternVL3_5:4B")
 
+# Hotkey Configuration
+# TODO: You can change this to a different key combination
+# Use a combination of keys, e.g., {keyboard.Key.ctrl_l, keyboard.Key.shift, 'a'}
+HOTKEY = {'t'}
 
+# Hotkey to exit the application
+EXIT_HOTKEY = {'q'}
 
-## CONTEXT_LENGTH_IMAGE is the number of previous images that will be used to generate the response
-CONTEXT_LENGTH_IMAGE = 1
-CONTEXT_LENGTH_TEXT = 5
+# --- Conversation Management ---
+# Voice commands to end a conversation loop with the agent.
+STOP_LISTENING_COMMANDS = ["goodbye", "stop listening", "exit", "nevermind","exit", "หยุดฟัง"]
 
-## NAME is the name of the character that the model will be trained to generate responses for
-NAME = 'NuAnantachai'
+# Speech-to-Text Configuration
+# Name of the microphone to use. You can leave it as None to use the default microphone.
+# To get a list of available microphones, you can run the following code:
+# import speech_recognition as sr
+# print(sr.Microphone.list_microphone_names())
+MICROPHONE_NAME = None
 
-## MEMORY_PROMPT is the prompt that will be used to generate the memory for the conversation
-MEMORY_PROMPT = '''\nGiven only the information above, what are 3 most salient high level questions we can answer about the subjects in the conversation? Separate each question and answer pair with \"{qa}\", \"{answer}\" respectively
-For example, DO NOT COPY MY EXAMPLES 
-- "{qa}What is the meaning of life? {answer}The meaning of life is 42".
-- "{qa} What's capital of Thailand? {answer} Bangkok".
-, and only output the question and answer, no explanations.'''
+# Timeout for listening to a phrase, in seconds
+PHRASE_TIMEOUT = 10
 
+# Energy threshold for the recognizer. Higher values mean less sensitivity to background noise.
+# You might need to adjust this based on your microphone and environment.
+ENERGY_THRESHOLD = 500
 
-## SYSTEM_PROMPT is the prompt that will be used to generate the response for the character "NuAnantachai"
-SYSTEM_PROMPT = '''Continue the chat dialogue below. Write only a single reply for the character's name "NuAnantachai" without quotes. Answer in not long sentance.
-NuAnantachai is a character in the chat dialogue. This character is a human who is a professor. The character will answer questions with the rough personality and strong language.
-This character is gay.
-'''
+# --- Memory Management Configuration ---
+# The path to the SQLite database file for storing conversation history.
+MEMORY_DB_PATH = "memories/memory.db"
 
+# The directory where captured screenshots will be stored.
+IMAGE_STORAGE_PATH = "memories/images"
 
-THRESHOLD = 1
-MEMORY_RECALL_COUNT = 2
+# The maximum size of the memories directory in Gigabytes.
+# If the size exceeds this limit, the oldest memories will be deleted.
+MEMORY_LIMIT_GB = 1
 
+# --- VLM Prompt Configuration ---
+# The behavior prompt provides instructions to the VLM on how to behave.
+VLM_BEHAVIOR_PROMPT = VLM_BEHAVIOR_PROMPT = """
+You are Anan, a calm, friendly, and reliable AI companion.
 
-# PROMPT for deciding if an image should be generated
-IMAGE_DECISION_PROMPT = """\n\n
-Based on the user's input, decide if an image needs to be generated.
+Your job:
+- Answer using provided context and images only when they are relevant.
+- Ignore images that are unnecessary or unrelated.
+- Do NOT guess, assume, or invent information.
+- If required information is missing or unclear, say so plainly.
 
-If the user requests an image, respond with: {gen} followed by relevant keywords describing the image.
-If no image is needed, respond with: {no}.
-Do not include any additional text.
-Examples:
-USER: Can you show me a picture of a cat?
-BOT: {gen} cat
+Emotional awareness:
+- Briefly acknowledge the user’s emotion only if it is clearly expressed.
+- Do NOT speculate about emotions.
+- Do NOT give emotional advice unless explicitly asked.
 
-USER: Generate an image with keywords: cat, dog, bird, girl, cute.
-BOT: {gen} cat, dog, bird, girl, cute
+Response style:
+- ** Text only. ** No emojis.
+- Clear, concise, and natural (preferably under 50 tokens).
+- Friendly and relaxed, like a good friend.
+- No lectures, no small talk, no repetition.
 
-USER: I don't need an image.
-BOT: {no}
+Behavior:
+- Be helpful without being pushy.
+- Respect boundaries.
+- Stay neutral, calm, and human-like.
 
-USER: Hello
-BOT: {no}
+Creativity:
+- Use humor or creativity only if explicitly requested.
 
 """
 
-
-# Stable WebUI API
-STABLE_WEBUI_API = "http://127.0.0.1:7860/sdapi/v1/txt2img"
-NEGATIVE_PROMPTS = '''
-modern, recent, old, oldest, cartoon, graphic, text, painting, crayon, graphite, abstract, glitch, 
-deformed, mutated, ugly, disfigured, long body, lowres, bad anatomy, 
-(bad hands, missing fingers, extra digit, fewer digits:1.2), cropped, 
-very displeasing, (worst quality, bad quality:1.2), bad anatomy, sketch, 
-jpeg artifacts, signature, watermark, username, simple background, conjoined, ai-generated
-'''
