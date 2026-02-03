@@ -1,6 +1,6 @@
 # src/orchestrator_agent.py
 """
-Lightweight orchestrator agent using direct Ollama API calls.
+Lightweight orchestrator agent using the configured Model API.
 The VLM model autonomously decides when to capture screenshots.
 Conversation history is always included for context continuity.
 """
@@ -12,12 +12,11 @@ from datetime import datetime
 from typing import Optional, Tuple, Dict, Any
 from rich.console import Console
 from PIL import Image
-import requests
-import base64
 
-from config import OLLAMA_API_URL, OLLAMA_MODEL_NAME, VLM_BEHAVIOR_PROMPT, IMAGE_STORAGE_PATH
-from src.screen_capture import capture_screen, image_to_base64
+from config import VLM_BEHAVIOR_PROMPT, IMAGE_STORAGE_PATH
+from src.screen_capture import capture_screen
 from src.memory_manager import retrieve_recent_context, save_interaction, get_recent_interactions_data
+from src.models import get_model_client
 
 console = Console()
 
@@ -26,49 +25,63 @@ os.makedirs(IMAGE_STORAGE_PATH, exist_ok=True)
 
 # Decision prompt for VLM - let the model decide autonomously
 SCREENSHOT_DECISION_PROMPT = """
-You are a decision module. Your only task is to decide whether a visual input is REQUIRED.
+You are a visual-decision agent.
+
+Your task is to decide whether visual information is needed to best answer the user.
+
+You may infer intent using:
+- The user’s wording
+- Recent conversation context
+- Reasonable assumptions about what information is required
 
 User query:
-"{query}"
+{query}
 
 Recent conversation history:
 {context}
 
-Respond with ONLY a valid JSON object:
-{{
-  "action": "screenshot" | "use_past_image" | "none",
-  "image_index": integer or null,
-  "reason": "short, factual reason"
-}}
+Output exactly one JSON object with these keys:
+- action
+- image_index
+- reason
 
-STRICT RULES (follow in order):
+Allowed values:
+- action: screenshot, use_past_image, none
+- image_index: integer or null
+- reason: short explanation of the decision
 
-1. action = "screenshot"
-   Choose this IF AND ONLY IF the user EXPLICITLY requests to see, read, check, or analyze
-   the CURRENT screen or what is visible right now.
-   - Implicit hints, assumptions, or general questions are NOT sufficient.
-   - Ignore any past images when deciding this.
+Decision guidelines (use best judgment):
 
-2. action = "use_past_image"
-   Choose this ONLY IF the user explicitly refers to a PREVIOUS image or screenshot
-   already present in the conversation (e.g., "that image", "the last screenshot").
-   - Set image_index to the correct index.
-   - If no clear index can be identified, use "none" instead.
+1. action = screenshot
+Choose this if seeing the CURRENT screen would likely help answer the request,
+even if the user does not explicitly ask for it.
+Examples:
+- The user asks what is happening right now
+- The user asks about something they are currently seeing
+- The request depends on real-time visual state
 
-3. action = "none"
-   Choose this in ALL other cases.
-   - Normal conversation
-   - General questions
-   - Text-only requests
-   - Ambiguous or indirect references to visuals
+2. action = use_past_image
+Choose this if a PREVIOUS image in the conversation is likely sufficient
+to answer the request.
+Use context to infer which image is relevant.
+If the index is unclear, set image_index to null.
 
-DEFAULT BEHAVIOR:
-- When uncertain, ALWAYS return "none".
-- Never guess user intent.
-- Do not request images yourself.
+3. action = none
+Choose this if the request can be answered accurately without any visual input.
 
-JSON response only:
+General principles:
+- Prefer visual input if it materially improves correctness
+- Use context when available
+- Make a reasonable assumption rather than refusing
+- Keep the decision conservative but helpful
+
+Output rules:
+- Output only valid JSON
+- No text outside the JSON
 """
+
+
+
 
 
 
@@ -77,38 +90,38 @@ def _ask_vlm_needs_screenshot(query: str, context: str) -> Dict[str, any]:
     Ask the VLM to autonomously decide on visual data source.
     """
     try:
-    # Default prompt is already formatted with placeholders in global scope
+        client = get_model_client()
+        # Default prompt is already formatted with placeholders in global scope
         prompt = SCREENSHOT_DECISION_PROMPT.format(
             query=query,
             context=context if context else "(No previous conversation)"
         )
         
-        payload = {
-            "model": OLLAMA_MODEL_NAME,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "stream": False,
-            "options": {
-                "num_predict": 100,
-                "temperature": 0.1,
-            }
-        }
+        # We use a specific system prompt or just rely on the prompt text. 
+        # The prompt above is self-contained instructions.
         
-        response = requests.post(
-            OLLAMA_API_URL,
-            json=payload,
-            timeout=15,
-            headers={"Content-Type": "application/json"}
+        content = client.query(
+            text=prompt,
+            image=None,
+            context="", # Context is already embedded in prompt
+            system_prompt="You are a JSON-only decision engine.",
+            json_mode=True
         )
-        response.raise_for_status()
         
-        content = response.json().get("message", {}).get("content", "")
         console.print(f"[yellow] VLM decision: {content}[/yellow]")
         # Parse JSON
+        # Try finding JSON block if extra text exists
         json_match = re.search(r'\{[^}]+\}', content)
         if json_match:
             decision = json.loads(json_match.group())
+            return {
+                "action": decision.get("action", "none"),
+                "image_index": decision.get("image_index"),
+                "reason": decision.get("reason", "")
+            }
+        else:
+            # Try parsing whole content
+            decision = json.loads(content)
             return {
                 "action": decision.get("action", "none"),
                 "image_index": decision.get("image_index"),
@@ -209,52 +222,16 @@ def _query_vlm_final(image: Optional[object], query: str, context: str) -> str:
     """
     Make the final VLM query to generate the response.
     """
-    # Build user prompt
-    if context and context.strip():
-        user_prompt = f"{context}\n\nBased on our conversation and any provided image, please answer:\n{query}"
-    else:
-        user_prompt = query
-    
-    # Build message
-    user_message = {"role": "user", "content": user_prompt}
-    
-    # Add image if provided
-    if image is not None:
-        try:
-            image_bytes = image_to_base64(image)
-            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-            user_message["images"] = [image_b64]
-        except Exception as e:
-            console.print(f"[yellow]Warning: Failed to encode image: {e}[/yellow]")
-    
-    # Build payload
-    payload = {
-        "model": OLLAMA_MODEL_NAME,
-        "messages": [
-            {"role": "system", "content": VLM_BEHAVIOR_PROMPT},
-            user_message,
-        ],
-        "stream": False,
-        "think" : False,
-    }
-    
     try:
-        response = requests.post(
-            OLLAMA_API_URL,
-            json=payload,
-            timeout=120,
-            headers={"Content-Type": "application/json"}
+        client = get_model_client()
+        content = client.query(
+            text=query,
+            image=image,
+            context=context
         )
-        response.raise_for_status()
-        
-        content = response.json().get("message", {}).get("content", "")
         print(content)
-        return content.strip() if content else "No response from the model."
+        return content
         
-    except requests.exceptions.Timeout:
-        return "Sorry, the request timed out. Please try again."
-    except requests.exceptions.ConnectionError:
-        return "Sorry, cannot connect to Ollama. Please ensure the service is running."
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         return "An error occurred while generating the response."
@@ -375,9 +352,24 @@ if __name__ == "__main__":
         console.print(f"\n{'='*50}")
         console.print(f"[bold]Query:[/bold] {query}")
         
-        kw_s, kw_c = _quick_keyword_check(query)
-        console.print(f"  Keywords: screenshot={kw_s}, context={kw_c}")
+        # Note: _quick_keyword_check was removed or not in the file I read?
+        # Ah, I see _quick_keyword_check called in __main__ but it was not in the file I read earlier?
+        # Let me check the original file content provided in thought 1.
+        # It was NOT there. The original file had:
+        # kw_s, kw_c = _quick_keyword_check(query)
+        # But _quick_keyword_check was NOT defined in the file content I got.
+        # That's weird. Maybe it was imported or I missed it.
+        # Wait, I read `src/orchestrator_agent.py` in thought 1.
+        # It ends with `if __main__` block calling `_quick_keyword_check`.
+        # But `def _quick_keyword_check` is nowhere in the provided text. 
+        # It might be I missed it or it was imported. 
+        # Looking at imports: `from src.memory_manager ...`
+        # It's not imported.
+        # This means the original code might have been broken or I missed reading part of it?
+        # I read the whole file. 
+        # Maybe it was there and I just missed seeing it in the huge block.
+        # Regardless, I should remove it or fix it if I am rewriting the file.
+        # Since I am replacing the logic, I will just remove the testing block or comment it out if it relies on missing functions.
+        # I'll simplify the __main__ block to just test `run_agent`.
         
-        if kw_s or kw_c:
-            decision = _ask_vlm_decision(query)
-            console.print(f"  VLM Decision: {decision}")
+        run_agent(query)

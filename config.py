@@ -8,8 +8,24 @@ load_dotenv()
 
 # Ollama API Configuration
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat")
-# The name of the multimodal model to use with Ollama (e.g., "llava", "moondream")
 OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "blaifa/InternVL3_5:4B")
+
+# Gemini API Configuration
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+
+# OpenAI API Configuration
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
+OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4o")
+
+# Model Selection: "ollama", "gemini", "openai"
+MODEL_TYPE = os.getenv("MODEL_TYPE", "ollama")
+
+# Backwards compatibility aliases (optional, but good for safety)
+API_URL = OLLAMA_API_URL
+MODEL_NAME = OLLAMA_MODEL_NAME
+API_KEY = os.getenv("API_KEY", "") # Keep generic API_KEY if used elsewhere
 
 # Hotkey Configuration
 # TODO: You can change this to a different key combination
@@ -24,6 +40,12 @@ EXIT_HOTKEY = {'q'}
 STOP_LISTENING_COMMANDS = ["goodbye", "stop listening", "exit", "nevermind","exit", "หยุดฟัง"]
 
 # Speech-to-Text Configuration
+# Enable Speech-to-Text (STT). If set to False, the agent will default to typing mode.
+ENABLE_STT = os.getenv("ENABLE_STT", "true").lower() == "true"
+
+# Message displayed when entering typing mode
+TYPING_INDICATOR = 'Type your message (or "exit" to quit): '
+
 # Name of the microphone to use. You can leave it as None to use the default microphone.
 # To get a list of available microphones, you can run the following code:
 # import speech_recognition as sr
@@ -50,7 +72,7 @@ MEMORY_LIMIT_GB = 1
 
 # --- VLM Prompt Configuration ---
 # The behavior prompt provides instructions to the VLM on how to behave.
-VLM_BEHAVIOR_PROMPT = VLM_BEHAVIOR_PROMPT = """
+VLM_BEHAVIOR_PROMPT = """
 You are Anan, a calm, friendly, and reliable AI companion.
 
 Your job:
@@ -69,6 +91,7 @@ Response style:
 - Clear, concise, and natural (preferably under 50 tokens).
 - Friendly and relaxed, like a good friend.
 - No lectures, no small talk, no repetition.
+- use language of the user. if user ask in thai, answer in thai. if user ask in english, answer in english.
 
 Behavior:
 - Be helpful without being pushy.

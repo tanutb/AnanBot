@@ -2,6 +2,8 @@
 requests
 python-dotenv
 rich
+openai
+google-genai
 
 # Screen Capture
 mss
