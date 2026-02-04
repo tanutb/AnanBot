@@ -1,7 +1,7 @@
 from typing import Final
 import os
 from dotenv import load_dotenv
-from discord import Intents, Client, Message, File
+from discord import Intents, Client, Message, File, ChannelType
 from utils.responses import get_response
 import base64
 from PIL import Image
@@ -11,7 +11,7 @@ from config import DISCORD_TOKEN
 
 # STEP 0: LOAD OUR TOKEN FROM SOMEWHERE SAFE
 load_dotenv()
-TOKEN: Final[str] = DISCORD_TOKEN
+TOKEN: Final[str] = os.getenv("DISCORD_TOKEN")
 
 # STEP 1: BOT SETUP
 intents: Intents = Intents.default()
@@ -19,55 +19,54 @@ intents.message_content = True  # NOQA
 client: Client = Client(intents=intents)
 
 # STEP 2: MESSAGE FUNCTIONALITY
-async def send_message(message: Message, user_message: str) -> None:
+async def send_message(message: Message, user_message: str, is_mentioned: bool) -> None:
+    user_id = str(message.author.id)
+    username = str(message.author.display_name)
 
-    if user_message :
-        if is_private := user_message[0] == '?':
-            user_message = user_message[1:]
-    else :
-        is_private = False
     try:
         if message.attachments:
             attachment = message.attachments[0]
             if attachment.filename.lower().endswith(('png', 'jpg', 'jpeg')):
                 image_path = f"./downloads/{attachment.filename}"
                 if user_message:
-                    mtext = "What is this image about? if it's have text Extracted describe it."
+                    mtext = "What is this image about? " + user_message
                 else : 
-                    mtext = user_message
-                chat_request = ChatRequest(text=mtext, image_path=image_path)
+                    mtext = "What is this image about?"
+                
+                chat_request = ChatRequest(
+                    text=mtext, 
+                    image_path=image_path, 
+                    user_id=user_id,
+                    username=username,
+                    is_mentioned=is_mentioned
+                )
                 response: str = get_response(chat_request)
         else :
-            chat_request = ChatRequest(text=user_message)
+            chat_request = ChatRequest(
+                text=user_message, 
+                user_id=user_id,
+                username=username,
+                is_mentioned=is_mentioned
+            )
             response: str = get_response(chat_request)
 
-        if is_private:
-            if isinstance(response, dict) and "response" in response and "img" in response:
+        # Handle Response (Always to channel)
+        target = message.channel
+
+        if isinstance(response, dict) and "response" in response:
+            text_response = response["response"]
+            
+            if "img" in response and response["img"]:
+                # Decode and send image
                 image_data = base64.b64decode(response['img'])
-                image = Image.open(BytesIO(image_data))
-                # Save the image to a BytesIO object
-                image_bytes = BytesIO()
-                image.save(image_bytes, format='PNG')
-                image_bytes.seek(0)
-                # Send the image as a file
-                await message.author.send(response["response"])
-                await message.author.send(file=File(image_bytes, filename='image.png'))
-            else:
-                await message.author.send(response["response"])
-        else:
-            if isinstance(response, dict) and "response" in response and "img" in response:
+                image_bytes = BytesIO(image_data)
                 
-                image_data = base64.b64decode(response['img'])
-                image = Image.open(BytesIO(image_data))
-                # Save the image to a BytesIO object
-                image_bytes = BytesIO()
-                image.save(image_bytes, format='PNG')
-                image_bytes.seek(0)
-                # Send the image as a file
-                await message.channel.send(response["response"])
-                await message.channel.send(file=File(image_bytes, filename='image.png'))
+                await target.send(text_response)
+                await target.send(file=File(image_bytes, filename='generated_image.png'))
             else:
-                await message.channel.send(response["response"])
+                await target.send(text_response)
+        else:
+             await target.send(str(response))
             
     except Exception as e:
         print(e)
@@ -82,15 +81,33 @@ async def on_ready() -> None:
 # STEP 4: HANDLING INCOMING MESSAGES
 @client.event
 async def on_message(message: Message) -> None:
-    # Ignore messages from the bot itself
+    # 1. Ignore messages from the bot itself
     if message.author == client.user:
         return
+    
+    # 2. Ignore Private Messages (DMs)
+    if message.guild is None:
+        return
+
+    # 3. Check if Bot is Mentioned or Replied to
+    is_mentioned = client.user in message.mentions
+    is_reply = (message.reference is not None and message.reference.resolved and message.reference.resolved.author == client.user)
+    
+    # "is_mentioned" flag for the model (True if tagged OR replied to)
+    is_targeted = is_mentioned or is_reply
 
     username: str = str(message.author)
     user_message: str = message.content
     channel: str = str(message.channel)
 
-    print(f'[{channel}] {username}: "{user_message}"')
+    print(f'[{channel}] {username}: "{user_message}" (Tagged: {is_targeted})')
+
+    # 4. Clean the Message: Remove the bot's mention tag <@ID> if present
+    if is_mentioned:
+        # Remove the mention string (e.g. <@123456789>)
+        user_message = user_message.replace(f'<@{client.user.id}>', '').strip()
+        # Also handle nickname mentions <@!ID>
+        user_message = user_message.replace(f'<@!{client.user.id}>', '').strip()
 
     # Check if the message contains attachments
     if message.attachments:
@@ -103,7 +120,7 @@ async def on_message(message: Message) -> None:
                 await attachment.save(f"./downloads/{attachment.filename}")
                 print(f"Image saved as ./downloads/{attachment.filename}")
                 
-    await send_message(message, user_message)
+    await send_message(message, user_message, is_targeted)
 
 # STEP 5: MAIN ENTRY POINT
 def main() -> None:
@@ -112,5 +129,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
-
