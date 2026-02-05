@@ -15,7 +15,7 @@
 ### 🎨 **Visual Creativity (Image Workflow)**
 - **Image Generation**: Detects `{gen}` intent to create stunning visuals on the fly.
 - **Image Editing**: Detects `{edit}` intent to modify existing images based on natural language instructions.
-- **Powered by Stable Diffusion**: seamless integration with Automatic1111 WebUI.
+- **Powered by GEMINI NANO BANANA**: Utilizing the `gemini-3-pro-image-preview` model, this engine delivers high-fidelity, rapid image synthesis and editing without external dependencies like Stable Diffusion. It handles complex prompts and visual transformations natively within the Gemini ecosystem.
 
 ### ⚡ **High-Performance Architecture**
 - **Asynchronous Core**: Decoupled response generation from memory storage. Users get **instant replies** while the bot creates memories in the background.
@@ -28,6 +28,8 @@
 ---
 
 ## 🛠️ System Architecture
+
+> 📘 **For a deep dive into the codebase, check out the [Technical Manual](TECHNICAL_MANUAL.md).**
 
 ### 1. General Processing Flow (Async Optimized)
 AnanBot uses an asynchronous "Fire-and-Forget" memory model to ensure zero latency for the user.
@@ -54,7 +56,7 @@ graph TD
     B --> C{Intent Detected?}
     
     C -- "{gen} cat" --> D[Generation Pipeline]
-    D -->|Prompt| E[Stable Diffusion API]
+    D -->|Prompt| E[Gemini Nano Banana]
     E -->|New Image| F[Response with Image]
     
     C -- "{edit} make it blue" --> G[Editing Pipeline]
@@ -70,7 +72,7 @@ graph TD
 
 ### Prerequisites
 - Python 3.10+
-- [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui) (for image features)
+- Google Cloud API Key (with access to Gemini 3 Pro Image Preview)
 
 ### Setup
 1. **Clone the Repository**
@@ -94,8 +96,8 @@ graph TD
    # Model Settings
    GEMINI_MODEL_NAME=gemini-1.5-flash
    
-   # Image Generation (A1111)
-   SD_API_URL=http://127.0.0.1:7860
+   # Image Generation
+   # No external URL needed for GEMINI NANO BANANA (Native Integration)
    ```
 
 ---
@@ -124,7 +126,7 @@ python terminal_chat.py
 ---
 
 ## ⚠️ Notes & Disclaimer
-- **Stable Diffusion**: Ensure your WebUI is running with `--api` flag enabled.
+- **Image Generation**: Uses `gemini-3-pro-image-preview` which may have rate limits or access requirements.
 - **Memory**: The first run will initialize the ChromaDB vector store.
 - **Optimization**: We recently moved memory operations to background tasks. This massively improves perceived latency but means "memories" might take a few seconds to settle after a reply.
 
