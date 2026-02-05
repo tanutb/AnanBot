@@ -17,13 +17,34 @@ Terminal Chat <----|             +----> Gemini API (Google)    +----> Images (Lo
 ## 🧩 Core Components
 
 ### 1. The `Multimodal` Class (`src/multimodal.py`)
-This is the brain of the operation. It manages:
-- **State**: Holds conversation history (`deque`), user profiles (`JSON`), and ephemeral context.
-- **RAG Loop**: Retrieves relevant past memories before generating a response.
-- **Tool Use**: Detects intent tags (e.g., `{gen}`, `{edit}`, `{karma+}`) in the LLM's raw output and executes the corresponding Python functions.
-- **Async Processing**: Handles response generation synchronously for speed, while offloading memory storage and summarization to background threads.
+The `Multimodal` class acts as the central orchestrator. It has been refactored to delegate specific responsibilities to specialized components, ensuring a clean separation of concerns.
 
-### 2. Memory Systems
+**Key Responsibilities:**
+- **Orchestration**: Coordinates data flow between the API, the LLM, and various managers.
+- **Intent Execution**: Detects specific intents (e.g., `{gen}`, `{edit}`, `{karma+}`) in the model's output and triggers the appropriate handlers.
+- **Response Assembly**: Combines text responses with generated images and metadata before returning them to the caller.
+
+### 2. Component Managers (`src/components/`)
+The monolithic logic has been broken down into:
+
+- **`MemoryEngine` (`memory_engine.py`)**:
+    - Manages **ChromaDB** interactions.
+    - Handles **RAG (Retrieval-Augmented Generation)**: Embeds queries using `text-embedding-004`, searches the vector store, and formats retrieved memories for context injection.
+    - **Fact Extraction**: Uses a secondary LLM call to extract permanent facts from conversation turns.
+
+- **`KarmaManager` (`karma_manager.py`)**:
+    - Manages persistent user profiles (`karma.json`).
+    - Tracks **Karma Scores** (influencing bot personality) and **Persona Summaries** (auto-updating descriptions of the user).
+
+- **`HistoryManager` (`history_manager.py`)**:
+    - Handles short-term memory (RAM-based `deque`).
+    - Manages the context window (`HISTORY_MAXLEN`) for both text and images, ensuring the LLM receives the most relevant recent conversation history.
+
+- **`ImageHandler` (`image_handler.py`)**:
+    - Handles I/O operations for images.
+    - Manages Base64 encoding/decoding and saving generated/uploaded images to disk (`./memories/images/`).
+
+### 3. Memory Systems
 AnanBot uses a **Tri-Layer Memory Architecture**:
 
 | Layer | Type | Storage | Persistence | Purpose |
@@ -94,7 +115,7 @@ Debug endpoint to inspect a user's profile.
 
 Key settings in `config.py`:
 - `HISTORY_MAXLEN` (Default: 100): How many messages to keep in RAM.
-- `CONTEXT_LENGTH_IMAGE` (Default: 2): How many previous images the bot can "see" in its history.
+- `CONTEXT_LENGTH_IMAGE` (Default: 3): How many previous images the bot can "see" in its history.
 - `MAX_TOKENS_MEMORY`: Limit for the fact-extraction sub-agent.
 - `THRESHOLD` (Default: 1.0): Distance threshold for RAG retrieval validity.
 
@@ -106,8 +127,14 @@ C:\Github\AnanBot
 ├── config.py               # Global Constants
 ├── discord_bot.py          # Discord Client
 ├── src
-│   ├── multimodal.py       # Main Agent Class
+│   ├── multimodal.py       # Main Agent Orchestrator
 │   ├── gemini_vision.py    # Image Generation Logic
+│   ├── components\
+│   │   ├── memory_engine.py   # RAG & Vector Store
+│   │   ├── karma_manager.py   # User Profiles & Karma
+│   │   ├── history_manager.py # Chat History (RAM)
+│   │   ├── image_handler.py   # Image I/O Utils
+│   │   └── common.py          # Shared Utilities
 │   └── ...
 ├── memories\               # Persistent Data (GitIgnored recommended)
 │   ├── chroma.db\          # Vector Store

@@ -72,11 +72,11 @@ def _generate_content(contents, prompt_desc):
             return {"images": [generated_image_b64]}
         else:
             print("No image data found in response.")
-            return None
+            return {"error": "No image data found in Gemini response."}
 
     except Exception as e:
         print(f"Error calling Gemini: {e}")
-        return None
+        return {"error": str(e)}
 
 def generate_image(prompt: str, **kwargs):
     """

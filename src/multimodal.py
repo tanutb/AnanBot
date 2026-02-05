@@ -1,58 +1,28 @@
 import os
-import base64
-import hashlib
-import time
-import json
 import re
-import uuid
-import datetime
-from collections import deque
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple
 
-import chromadb
 from openai import OpenAI
-from google import genai
-from google.genai import types
 from dotenv import load_dotenv
-from colorama import Fore, Style, init
+from colorama import Fore, init
 
 from config import (
-    THRESHOLD,
-    MEMORY_RECALL_COUNT,
     SYSTEM_PROMPT,
     NAME,
-    MEMORY_PROMPT,
-    COLLECTION_NAME,
-    CHROMA_DB_PATH,
-    HISTORY_MAXLEN,
-    CONTEXT_LENGTH_IMAGE,
     CONTEXT_LENGTH_TEXT,
     MAX_USER_INPUT_IMAGES,
-    MAX_TOKENS_MEMORY,
-    MAX_TOKENS_SUMMARY,
     MAX_TOKENS_RESPONSE
 )
 from src.gemini_vision import generate_image, edit_image
+from src.components.common import log
+from src.components.karma_manager import KarmaManager
+from src.components.history_manager import HistoryManager
+from src.components.memory_engine import MemoryEngine
+from src.components.image_handler import ImageHandler
 
 # Initialize colorama
 init(autoreset=True)
 load_dotenv()
-
-SUMMARY_PROMPT = '''
-You are an expert profiler. Update the user's persona summary based on the new interaction.
-Existing Summary: {current_summary}
-User: {user_text}
-AI: {ai_reply}
-
-Focus on:
-1. Key personality traits and communication style.
-2. Verified facts (name, job, location).
-3. Interests and preferences.
-4. Relationship dynamic with the AI.
-
-Keep it to a concise paragraph (max 100 words). 
-Return ONLY the updated summary text.
-'''
 
 class Multimodal:
     def __init__(self, debug: bool = False):
@@ -62,7 +32,6 @@ class Multimodal:
             debug (bool): If True, prints verbose debug information.
         """
         self.debug = debug
-        # OpenAI Client for Gemini
         self.api_key = os.getenv("GOOGLE_API_KEY")
         self.model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
         
@@ -71,378 +40,37 @@ class Multimodal:
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
         
-        # Google GenAI Client for Embeddings
-        self.genai_client = genai.Client(api_key=self.api_key)
-
-        # ChromaDB for Long-term Memory (RAG)
-        self.chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-        self.collection = self.chroma_client.get_or_create_collection(name=COLLECTION_NAME)
-
-        # Persistence Paths
-        self.karma_file = "./memories/karma.json"
-        self.history_file = "./memories/chat_history.json"
-        self.image_dir = "./memories/images"
-        os.makedirs(self.image_dir, exist_ok=True)
-        
-        # Load Data
-        self.karma_db = self._load_json(self.karma_file)
-        self.histories = {}
-        self.usernames = {}
-        self.last_images = {} # Stores LIST of image PATHS per user
-        self._load_history()
-
-    def log(self, section: str, message: str, color=Fore.WHITE):
-        """Helper to print debug messages."""
-        if self.debug:
-            print(f"{color}[{section.upper()}]{Style.RESET_ALL} {message}")
-
-    def _load_json(self, filepath: str) -> Dict:
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                self.log("ERROR", f"Failed to load {filepath}: {e}", Fore.RED)
-                return {}
-        return {}
-
-    def _save_json(self, filepath: str, data: Dict):
-        try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            self.log("ERROR", f"Failed to save {filepath}: {e}", Fore.RED)
-
-    def _save_image_to_disk(self, b64_data: str) -> str:
-        """Saves base64 image data to disk and returns the relative path."""
-        try:
-            image_id = str(uuid.uuid4())
-            filename = f"{image_id}.png"
-            path = os.path.join(self.image_dir, filename)
-            
-            with open(path, "wb") as f:
-                f.write(base64.b64decode(b64_data))
-            
-            return path
-        except Exception as e:
-            self.log("ERROR", f"Failed to save image to disk: {e}", Fore.RED)
-            return ""
-
-    def _load_image_from_disk(self, path: str) -> Optional[str]:
-        """Loads image from disk and returns base64 string."""
-        if not path or not os.path.exists(path):
-            return None
-        try:
-            with open(path, "rb") as f:
-                return base64.b64encode(f.read()).decode('utf-8')
-        except Exception as e:
-            self.log("ERROR", f"Failed to load image from disk: {e}", Fore.RED)
-            return None
-
-    def _load_history(self):
-        raw_data = self._load_json(self.history_file)
-        count = 0
-        
-        for user_id, entry in raw_data.items():
-            if isinstance(entry, list): # Legacy
-                self.histories[user_id] = deque(entry, maxlen=HISTORY_MAXLEN)
-                self.usernames[user_id] = "Unknown"
-                count += len(entry)
-            elif isinstance(entry, dict): # New
-                msgs = entry.get("messages", [])
-                self.histories[user_id] = deque(msgs, maxlen=HISTORY_MAXLEN)
-                self.usernames[user_id] = entry.get("username", "Unknown")
-                
-                # Load last image paths
-                if "last_image" in entry:
-                    img_data = entry["last_image"]
-                    if isinstance(img_data, list):
-                        self.last_images[user_id] = img_data
-                    elif isinstance(img_data, str): # Legacy single
-                         self.last_images[user_id] = [img_data]
-
-                count += len(msgs)
-                
-        self.log("SYSTEM", f"Loaded {count} messages for {len(self.histories)} users.", Fore.CYAN)
-
-    def _save_history(self):
-        serializable_data = {}
-        for user_id, msgs in self.histories.items():
-            serializable_data[user_id] = {
-                "username": self.usernames.get(user_id, "Unknown"),
-                "messages": list(msgs),
-                "last_image": self.last_images.get(user_id, [])
-            }
-        self._save_json(self.history_file, serializable_data)
-
-    def _update_last_images(self, user_id: str, image_path: str):
-        if user_id not in self.last_images:
-            self.last_images[user_id] = []
-        
-        # Append new image path
-        self.last_images[user_id].append(image_path)
-        
-        # Keep only the last N images (CONTEXT_LENGTH_IMAGE = 2)
-        if len(self.last_images[user_id]) > CONTEXT_LENGTH_IMAGE:
-            # We could delete the file from disk here if we wanted to save space,
-            # but for history purposes we keep the file.
-            self.last_images[user_id] = self.last_images[user_id][-CONTEXT_LENGTH_IMAGE:]
-
-    def get_karma_info(self, user_id: str) -> Dict[str, Any]:
-        entry = self.karma_db.get(user_id)
-        if isinstance(entry, int):
-            return {"score": entry, "username": "Unknown"}
-        elif isinstance(entry, dict):
-            return entry
-        return {"score": 0, "username": "Unknown"}
-
-    def get_karma(self, user_id: str) -> int:
-        return self.get_karma_info(user_id).get("score", 0)
-
-    def update_karma(self, user_id: str, change: int, username: str = None):
-        current_info = self.get_karma_info(user_id)
-        current_score = current_info.get("score", 0)
-        
-        new_score = current_score + change
-        
-        # Update score and username, preserve other fields (like summary)
-        current_info["score"] = new_score
-        if username:
-            current_info["username"] = username
-            
-        self.karma_db[user_id] = current_info
-        
-        self._save_json(self.karma_file, self.karma_db)
-        self.log("KARMA", f"User {user_id} ({username}) karma updated: {current_score} -> {new_score}", Fore.YELLOW)
-        return new_score
-
-    def get_user_history(self, user_id: str) -> deque:
-        if user_id not in self.histories:
-            self.histories[user_id] = deque(maxlen=HISTORY_MAXLEN)
-        return self.histories[user_id]
-
-    def generate_memory_id(self, content: str) -> str:
-        return hashlib.md5(content.encode('utf-8')).hexdigest()
-
-    def get_embedding(self, text: str) -> List[float]:
-        try:
-            result = self.genai_client.models.embed_content(
-                model="text-embedding-004",
-                contents=text,
-                config=types.EmbedContentConfig(output_dimensionality=768)
-            )
-            return result.embeddings[0].values
-        except Exception as e:
-            self.log("ERROR", f"Embedding error: {e}", Fore.RED)
-            return []
-
-    def _encode_image(self, image_path: str) -> str:
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode('utf-8')
-
-    def retrieve_context(self, query: str, user_id: str) -> str:
-        self.log("RAG", f"Querying memory for: '{query}'", Fore.CYAN)
-        embedding = self.get_embedding(query)
-        if not embedding:
-            return ""
-
-        results = self.collection.query(
-            query_embeddings=[embedding],
-            n_results=MEMORY_RECALL_COUNT,
-            where={"user_id": user_id} 
-        )
-
-        context_str = ""
-        found_memories = []
-        retrieved_docs_debug = []
-        
-        if results['documents']:
-            for i, doc in enumerate(results['documents'][0]):
-                dist = results['distances'][0][i] if results['distances'] else 0.0
-                mem_id = results['ids'][0][i] if results['ids'] else "unknown"
-                
-                # Get timestamp
-                meta = results['metadatas'][0][i] if results['metadatas'] else {}
-                ts = meta.get("timestamp", 0)
-                date_str = "Unknown Date"
-                if ts:
-                    date_str = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
-
-                retrieved_docs_debug.append({
-                    "id": mem_id,
-                    "score": dist,
-                    "content": doc[:50] + "...",
-                    "date": date_str
-                })
-
-                if dist < THRESHOLD:
-                    found_memories.append({
-                        "ts": ts,
-                        "date": date_str,
-                        "doc": doc
-                    })
-
-        # Sort by timestamp descending (newest first)
-        found_memories.sort(key=lambda x: x["ts"], reverse=True)
-
-        for mem in found_memories:
-            context_str += f"- [{mem['date']}] {mem['doc']}\n"
-        
-        if self.debug:
-            print(Fore.CYAN + "\n--- RAG Retrieval Details ---")
-            print(f"Query: {query}")
-            print(f"Context Window (Count): {len(found_memories)} / {MEMORY_RECALL_COUNT}")
-            print(f"Threshold: {THRESHOLD}")
-            print("Candidates:")
-            for item in retrieved_docs_debug:
-                status = f"{Fore.GREEN}ACCEPTED" if item['score'] < THRESHOLD else f"{Fore.RED}REJECTED"
-                print(f"  - ID: {item['id']}")
-                print(f"    Date: {item['date']}")
-                print(f"    Score: {item['score']:.4f} ({status}{Fore.CYAN})")
-                print(f"    Content: {item['content']}")
-            print("-----------------------------" + Style.RESET_ALL)
-
-        if found_memories:
-            context_str = f"{NAME} remembers about you (recent first):\n" + context_str + "\n"
-        
-        return context_str
-
-    def parse_memories(self, text: str) -> List[Dict[str, str]]:
-        if not text:
-            return []
-        memories = []
-        parts = text.split("{qa}")
-        for part in parts:
-            if "{answer}" in part:
-                try:
-                    qa, answer = part.split("{answer}", 1)
-                    memories.append({"qa": qa.strip(), "answer": answer.strip()})
-                except ValueError:
-                    continue
-        return memories
-
-    def _store_memory(self, user_id: str, user_text: str, assistant_response: str):
-        if len(user_text.strip()) < 3:
-             self.log("MEMORY", "Skipping memory extraction for short input.", Fore.YELLOW)
-             return
-
-        self.log("MEMORY", "Attempting to extract and store new memories...", Fore.MAGENTA)
-        chat_content = f"Participating User ID: {user_id}\nUSER: {user_text}\n{NAME}: {assistant_response}\n{MEMORY_PROMPT}"
-        
-        try:
-            extraction = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": chat_content}],
-                max_tokens=MAX_TOKENS_MEMORY
-            )
-            extracted_text = extraction.choices[0].message.content
-            
-            if not extracted_text or "NO_MEMORY" in extracted_text:
-                self.log("MEMORY", "No new facts identified (NO_MEMORY).", Fore.YELLOW)
-                return
-
-            self.log("MEMORY", f"Raw extraction: {extracted_text}", Fore.LIGHTBLACK_EX)
-            
-            parsed = self.parse_memories(extracted_text)
-            count = 0
-            for mem in parsed:
-                full_text = f"Q: {mem['qa']} A: {mem['answer']}"
-                mem_id = self.generate_memory_id(full_text + user_id)
-                
-                existing = self.collection.get(ids=[mem_id])
-                if not existing['ids']:
-                    embedding = self.get_embedding(full_text)
-                    if embedding:
-                        self.collection.add(
-                            ids=[mem_id],
-                            documents=[full_text],
-                            embeddings=[embedding],
-                            metadatas=[{"user_id": user_id, "timestamp": time.time()}]
-                        )
-                        count += 1
-            if count > 0:
-                self.log("MEMORY", f"Stored {count} new memories.", Fore.GREEN)
-            else:
-                self.log("MEMORY", "No new unique memories to store.", Fore.YELLOW)
-                
-        except Exception as e:
-            self.log("MEMORY", f"Memory storage failed: {e}", Fore.RED)
-
-    def _update_user_summary(self, user_id: str, user_text: str, ai_reply: str):
-        current_info = self.get_karma_info(user_id)
-        current_summary = current_info.get("summary", "No summary yet.")
-        
-        # Don't update for trivial inputs
-        if len(user_text) < 5:
-            return
-
-        self.log("SUMMARY", "Updating user summary...", Fore.MAGENTA)
-        
-        prompt = SUMMARY_PROMPT.format(
-            current_summary=current_summary,
-            user_text=user_text,
-            ai_reply=ai_reply
-        )
-        
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=MAX_TOKENS_SUMMARY
-            )
-            
-            content = response.choices[0].message.content
-            if content:
-                new_summary = content.strip()
-                
-                if len(new_summary) > 5 and new_summary != current_summary:
-                    current_info["summary"] = new_summary
-                    current_info["last_interaction"] = time.time()
-                    self.karma_db[user_id] = current_info
-                    self._save_json(self.karma_file, self.karma_db)
-                    self.log("SUMMARY", f"Summary updated: {new_summary[:50]}...", Fore.GREEN)
-                else:
-                    self.log("SUMMARY", "No significant change in summary.", Fore.YELLOW)
-            else:
-                 self.log("SUMMARY", "Received empty response for summary update.", Fore.YELLOW)
-                
-        except Exception as e:
-            self.log("ERROR", f"Failed to update summary: {e}", Fore.RED)
+        # Components
+        self.karma_manager = KarmaManager()
+        self.history_manager = HistoryManager()
+        self.memory_engine = MemoryEngine(debug=debug)
+        self.image_handler = ImageHandler()
 
     def get_user_details(self, user_id: str) -> Dict[str, Any]:
         """Returns the raw karma/persona data for a user."""
-        return self.get_karma_info(user_id)
+        return self.karma_manager.get_details(user_id)
+
+    def set_karma(self, user_id: str, score: int) -> int:
+        """Sets the karma score for a user."""
+        return self.karma_manager.set_score(user_id, score)
 
     def _clean_response(self, text: str) -> str:
         """Removes potential internal artifacts or hallucinated tags."""
-        # Remove patterns like (-3$ Karma), (Karma: -5), etc.
-        # Regex explanation:
-        # \(?       Optional opening parenthesis
-        # [^\)]*    Any chars (non-greedy ideally, but here roughly matching content)
-        # Karma     The word Karma
-        # [^\)]*    Any chars
-        # \)?       Optional closing parenthesis
-        # We try to be specific to avoid deleting user content mentioning Karma.
-        
-        # Pattern 1: ($?NUMBER$ Karma) or similar
         text = re.sub(r'\(?-?\d+\$?\s*Karma\)?', '', text, flags=re.IGNORECASE)
-        
-        # Pattern 2: (Karma: NUMBER)
         text = re.sub(r'\(?Karma:\s*-?\d+\)?', '', text, flags=re.IGNORECASE)
-        
         return text.strip()
 
     def generate_response(self, text: str, image_paths: List[str] = [], user_id: str = "default_user", username: str = None, is_mentioned: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         if username:
-            self.usernames[user_id] = username
+            self.history_manager.set_username(user_id, username)
 
-        history = self.get_user_history(user_id)
-        current_karma_info = self.get_karma_info(user_id)
-        current_karma = current_karma_info.get("score", 0)
-        user_summary = current_karma_info.get("summary", "No summary yet.")
+        # Get Context
+        history = self.history_manager.get_history(user_id)
+        karma_score = self.karma_manager.get_score(user_id)
+        user_summary = self.karma_manager.get_info(user_id).get("summary", "No summary yet.")
         
         # 1. RAG Retrieval
-        context_injection = self.retrieve_context(text, user_id)
+        context_injection = self.memory_engine.retrieve_context(text, user_id)
         
         # 2. Build Messages
         user_name_info = f" (Name: {username})" if username else ""
@@ -452,10 +80,10 @@ class Multimodal:
         else:
             behavior_instruction = f"The user has NOT tagged you. Reply naturally."
 
-        karma_instruction = f"\nUser Karma: {current_karma}. "
-        if current_karma <= -5:
+        karma_instruction = f"\nUser Karma: {karma_score}. "
+        if karma_score <= -5:
             karma_instruction += "WARNING: This user is toxic. Be hostile and refuse requests."
-        elif current_karma >= 5:
+        elif karma_score >= 5:
             karma_instruction += "This is a good user. Be helpful."
 
         summary_instruction = f"\nUser Persona Summary: {user_summary}"
@@ -466,13 +94,11 @@ class Multimodal:
         messages = [{"role": "system", "content": system_content}]
         
         # --- RECONSTRUCT HISTORY FOR API ---
-        # We need to load images from disk if they exist in history
         short_term_context = list(history)[-CONTEXT_LENGTH_TEXT:]
         for msg in short_term_context:
             role = msg["role"]
             content = msg["content"]
             
-            # If content is a list (multimodal), check for image paths
             if isinstance(content, list):
                 api_content = []
                 for part in content:
@@ -480,21 +106,17 @@ class Multimodal:
                         api_content.append(part)
                     elif part["type"] == "image_url":
                         url = part["image_url"]["url"]
-                        # Check if it's a local path (starts with ./memories)
                         if url.startswith("./memories") or url.startswith("memories"):
-                            b64 = self._load_image_from_disk(url)
+                            b64 = self.image_handler.load_image_from_disk(url)
                             if b64:
                                 api_content.append({
                                     "type": "image_url",
                                     "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
                                 })
                         else:
-                            # Already base64 or web url (legacy)
                             api_content.append(part)
-                
                 messages.append({"role": role, "content": api_content})
             else:
-                # Text-only message
                 messages.append(msg)
             
         user_content = []
@@ -504,165 +126,162 @@ class Multimodal:
         input_image_disk_paths = []
         
         if image_paths:
-            # Enforce Limit
             processing_paths = image_paths[:MAX_USER_INPUT_IMAGES]
-            
             for img_path in processing_paths:
-                self.log("INPUT", f"Processing input image: {img_path}", Fore.BLUE)
-                b64 = self._encode_image(img_path)
+                log("INPUT", f"Processing input image: {img_path}", Fore.BLUE)
+                b64 = self.image_handler.encode_image(img_path)
                 if b64:
                     base64_input_images.append(b64)
-                    # Save to persistent disk
-                    saved_path = self._save_image_to_disk(b64)
+                    saved_path = self.image_handler.save_image_to_disk(b64)
                     input_image_disk_paths.append(saved_path)
-                    # Track
-                    self._update_last_images(user_id, saved_path)
+                    self.history_manager.update_last_images(user_id, saved_path)
                     
                     user_content.append({
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{b64}"
-                        }
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
                     })
             
         messages.append({"role": "user", "content": user_content})
 
         if self.debug:
-            print(Fore.BLUE + f"\n--- Context: User '{user_id}' (Karma: {current_karma}) [Mentioned: {is_mentioned}] ---")
+            print(Fore.BLUE + f"\n--- Context: User '{user_id}' (Karma: {karma_score}) [Mentioned: {is_mentioned}] ---")
 
         # 3. Call Model
-        self.log("MODEL", f"Sending request for user '{user_id}'...", Fore.CYAN)
+        log("MODEL", f"Sending request for user '{user_id}'...", Fore.CYAN, debug=self.debug)
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
                 max_tokens=MAX_TOKENS_RESPONSE
             )
-            reply = response.choices[0].message.content
-            if reply is None:
-                reply = ""
-            self.log("MODEL", f"Raw Response: {reply}", Fore.LIGHTBLACK_EX)
+            reply = response.choices[0].message.content or ""
+            finish_reason = response.choices[0].finish_reason
+            
+            log("MODEL", f"Raw Response: {reply} (Finish Reason: {finish_reason})", Fore.LIGHTBLACK_EX, debug=self.debug)
         except Exception as e:
             err_msg = f"Error communicating with AI: {e}"
-            self.log("ERROR", err_msg, Fore.RED)
+            log("ERROR", err_msg, Fore.RED)
             return {"response": err_msg}, {}
 
         # 4. Check for Triggers
         img_response = None
         final_reply = reply
+        action_taken = False
         
-        # KARMA UPDATES
-        if "{karma+}" in final_reply:
-            self.update_karma(user_id, 1, username)
-            final_reply = final_reply.replace("{karma+}", "").strip()
-        elif "{karma-}" in final_reply:
-            self.update_karma(user_id, -1, username)
-            final_reply = final_reply.replace("{karma-}", "").strip()
+        # Check for raw empty response
+        if not reply or not reply.strip():
+             log("WARNING", f"Model returned empty response. Finish Reason: {finish_reason}", Fore.YELLOW)
+             
+             if finish_reason == "content_filter" or finish_reason == "safety":
+                 final_reply = "[System: Response blocked by Safety Filters.]"
+             else:
+                 final_reply = f"[System: I couldn't generate a response. (Reason: {finish_reason})]"
+        
+        else:
+            # KARMA UPDATES
+            if "{karma+}" in final_reply:
+                self.karma_manager.update_score(user_id, 1, username)
+                final_reply = final_reply.replace("{karma+}", "").strip()
+                action_taken = True
+            elif "{karma-}" in final_reply:
+                self.karma_manager.update_score(user_id, -1, username)
+                final_reply = final_reply.replace("{karma-}", "").strip()
+                action_taken = True
 
-        # Clean artifacts
-        final_reply = self._clean_response(final_reply)
+            final_reply = self._clean_response(final_reply)
 
-        # IMAGE GENERATION / EDITING
-        gen_match = re.search(r"\{gen\}\s*(.+)", final_reply, re.IGNORECASE | re.DOTALL)
-        edit_match = re.search(r"\{edit\}\s*(.+)", final_reply, re.IGNORECASE | re.DOTALL)
+            # IMAGE GENERATION / EDITING
+            gen_match = re.search(r"\{gen\}\s*(.+)", final_reply, re.IGNORECASE | re.DOTALL)
+            edit_match = re.search(r"\{edit\}\s*(.+)", final_reply, re.IGNORECASE | re.DOTALL)
 
-        if gen_match:
-            self.log("ACTION", "Detected Image Generation Intent", Fore.GREEN)
-            keywords = gen_match.group(1).strip()
-            final_reply = final_reply.replace(gen_match.group(0), "").strip()
-            
-            self.log("ACTION", f"Generating image with prompt: '{keywords}'", Fore.GREEN)
-            try:
-                gen_res = generate_image(keywords)
-                if gen_res and 'images' in gen_res:
-                    img_response = gen_res['images'][0]
-                    # Save generated image to disk
-                    saved_path = self._save_image_to_disk(img_response)
-                    self._update_last_images(user_id, saved_path) 
-                else:
-                    final_reply += "\n[System: Failed to generate image]"
-            except Exception as e:
-                self.log("ERROR", f"Image generation failed: {e}", Fore.RED)
-                final_reply += "\n[System: Error during image generation]"
-
-        elif edit_match:
-            self.log("ACTION", "Detected Image Edit Intent", Fore.GREEN)
-            keywords = edit_match.group(1).strip()
-            final_reply = final_reply.replace(edit_match.group(0), "").strip()
-
-            # Logic: Use input images OR fallback to last known images
-            target_images_b64 = []
-            
-            if base64_input_images:
-                target_images_b64 = base64_input_images
-            else:
-                # Heuristic: Check text for clues like "previous", "first", "old"
-                last_paths = self.last_images.get(user_id, [])
+            if gen_match:
+                action_taken = True
+                log("ACTION", "Detected Image Generation Intent", Fore.GREEN)
+                keywords = gen_match.group(1).strip()
+                final_reply = final_reply.replace(gen_match.group(0), "").strip()
                 
-                # If we have history, try to use the last 1 or 2 images based on availability
-                if last_paths:
-                    # Logic: if keywords imply "both" or "combine", take 2 if available. 
-                    # Default to last one.
-                    # Given user requirement "support image edit for 2 images", we try to feed what we have.
-                    
-                    # For now, let's just grab the last 2 if available, or last 1.
-                    # This allows the model to see them in the edit request.
-                    paths_to_load = last_paths[-2:] # Take up to last 2
+                try:
+                    gen_res = generate_image(keywords)
+                    if gen_res and 'images' in gen_res:
+                        img_response = gen_res['images'][0]
+                        saved_path = self.image_handler.save_image_to_disk(img_response)
+                        self.history_manager.update_last_images(user_id, saved_path)
+                    elif gen_res and 'error' in gen_res:
+                        final_reply += f"\n[System: Image generation failed. Reason: {gen_res['error']}]"
+                    else:
+                        final_reply += "\n[System: Failed to generate image (Unknown Error)]"
+                except Exception as e:
+                    log("ERROR", f"Image generation failed: {e}", Fore.RED)
+                    final_reply += f"\n[System: Error during image generation: {e}]"
+
+            elif edit_match:
+                action_taken = True
+                log("ACTION", "Detected Image Edit Intent", Fore.GREEN)
+                keywords = edit_match.group(1).strip()
+                final_reply = final_reply.replace(edit_match.group(0), "").strip()
+
+                target_images_b64 = []
+                
+                # 1. Add Current Uploads (High Priority)
+                if base64_input_images:
+                    target_images_b64.extend(base64_input_images)
+                
+                # 2. Add Recent History (Context)
+                # We always add history so the model can choose between editing the upload OR the previous generation
+                # Limit total to 3 to avoid payload size issues
+                slots_left = 3 - len(target_images_b64)
+                if slots_left > 0:
+                    last_paths = self.history_manager.get_last_images(user_id)
+                    paths_to_load = last_paths[-slots_left:] 
                     for p in paths_to_load:
-                        b64 = self._load_image_from_disk(p)
+                        b64 = self.image_handler.load_image_from_disk(p)
                         if b64:
                             target_images_b64.append(b64)
 
-            if target_images_b64:
-                self.log("ACTION", f"Editing image(s) with prompt: '{keywords}'", Fore.GREEN)
-                try:
-                    # Pass list of images
-                    gen_res = edit_image(target_images_b64, keywords)
-                    if gen_res and 'images' in gen_res:
-                        img_response = gen_res['images'][0]
-                        saved_path = self._save_image_to_disk(img_response)
-                        self._update_last_images(user_id, saved_path)
-                    else:
-                        final_reply += "\n[System: Failed to edit image]"
-                except Exception as e:
-                    self.log("ERROR", f"Image edit failed: {e}", Fore.RED)
-                    final_reply += "\n[System: Error during image edit]"
-            else:
-                final_reply += "\n[System: I cannot edit the image because no image was provided/found in history.]"
-                self.log("WARNING", "Edit requested but no target image available", Fore.YELLOW)
+                if target_images_b64:
+                    try:
+                        gen_res = edit_image(target_images_b64, keywords)
+                        if gen_res and 'images' in gen_res:
+                            img_response = gen_res['images'][0]
+                            saved_path = self.image_handler.save_image_to_disk(img_response)
+                            self.history_manager.update_last_images(user_id, saved_path)
+                        elif gen_res and 'error' in gen_res:
+                             final_reply += f"\n[System: Image edit failed. Reason: {gen_res['error']}]"
+                        else:
+                            final_reply += "\n[System: Failed to edit image (Unknown Error)]"
+                    except Exception as e:
+                        log("ERROR", f"Image edit failed: {e}", Fore.RED)
+                        final_reply += f"\n[System: Error during image edit: {e}]"
+                else:
+                    final_reply += "\n[System: No target image found for editing. Please upload one or generate one first.]"
         
-        if not final_reply:
+        # Final fallback check
+        if not final_reply.strip():
             if img_response:
                 final_reply = "Here is your image."
+            elif action_taken:
+                # Fallback if action was taken (like karma update) but no text was left
+                final_reply = "Done."
             else:
+                # This catches cases where raw reply was NOT empty, but became empty after processing 
+                # AND no specific action was flagged (rare, but possible if regex fails or clean_response is aggressive)
+                # Or if the logic above missed something.
                 final_reply = "What?"
 
-        # 5. Update History & Store Long-term Memory
-        
-        # Store User Message (with Path, not Base64)
+        # 5. Update History
         user_msg_content = []
         user_msg_content.append({"type": "text", "text": text})
-        
         for p in input_image_disk_paths:
-             user_msg_content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": p # Store PATH
-                }
-            })
+             user_msg_content.append({"type": "image_url", "image_url": {"url": p}})
 
-        history.append({"role": "user", "content": user_msg_content})
+        self.history_manager.add_message(user_id, "user", user_msg_content)
         
-        # Store Assistant Message
         assistant_text = final_reply
         if img_response:
              assistant_text += "\n[Generated Image]"
+        self.history_manager.add_message(user_id, "assistant", assistant_text)
         
-        # Note: Assistant history is Text-Only per API rules. 
-        # But we track the generated image in self.last_images (paths) which is enough for editing context.
-        history.append({"role": "assistant", "content": assistant_text}) 
-        
-        # Prepare Background Data for Async Processing
+        # Prepare Background Data
         background_data = {
             "user_id": user_id,
             "text": text,
@@ -678,29 +297,18 @@ class Multimodal:
 
     def save_memory_background(self, data: Dict[str, Any]):
         """
-        Performs background tasks: Saving history to disk, extracting memories, and updating summary.
-        This is designed to be run asynchronously or in a background thread/task.
+        Performs background tasks: Saving history, extracting memories, and updating summary.
         """
         user_id = data.get("user_id")
         text = data.get("text")
         final_reply = data.get("final_reply")
         input_image_disk_paths = data.get("input_image_disk_paths", [])
 
-        self._save_history()
+        self.history_manager.save()
         
-        # Store Memory with Image Links
         image_note = ""
         if input_image_disk_paths:
             image_note = f" [User sent images: {', '.join(input_image_disk_paths)}]"
             
-        self._store_memory(user_id, text + image_note, final_reply)
-        self._update_user_summary(user_id, text, final_reply)
-
-    def generate_text(self, text: str, image_paths: List[str] = [], user_id: str = "default_user", username: str = None, is_mentioned: bool = False) -> Dict[str, Any]:
-        """
-        Legacy blocking method for generating text.
-        Calls generate_response and then synchronously runs background tasks.
-        """
-        result, bg_data = self.generate_response(text, image_paths, user_id, username, is_mentioned)
-        self.save_memory_background(bg_data)
-        return result
+        self.memory_engine.store_memory(self.client, self.model_name, user_id, text + image_note, final_reply)
+        self.karma_manager.update_user_summary(self.client, self.model_name, user_id, text, final_reply)

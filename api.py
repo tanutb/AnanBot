@@ -40,6 +40,11 @@ async def get_user_details(user_id: str):
     details = MultiModal.get_user_details(user_id)
     return JSONResponse(content=details)
 
+@app.post("/user/{user_id}/karma")
+async def set_user_karma(user_id: str, score: int):
+    new_score = MultiModal.set_karma(user_id, score)
+    return JSONResponse(content={"user_id": user_id, "score": new_score})
+
 
 if __name__ == "__main__":
     # Initialize FastAPI app

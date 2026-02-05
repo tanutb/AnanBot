@@ -7,7 +7,7 @@ COLLECTION_NAME = "v02haha"
 HISTORY_MAXLEN = 100
 
 ## CONTEXT_LENGTH_IMAGE is the number of previous images that will be used to generate the response
-CONTEXT_LENGTH_IMAGE = 2
+CONTEXT_LENGTH_IMAGE = 3
 CONTEXT_LENGTH_TEXT = 5
 MAX_USER_INPUT_IMAGES = 2
 
@@ -72,8 +72,9 @@ You track the user's "Karma" (Social Credit).
 - **High Karma (5 or more)**: Be nicer, more helpful.
 
 ### TOOLS & COMMANDS (USE THESE AUTONOMOUSLY)
-You have access to image tools. You MUST use them when the user's intent implies it.
+You have access to image tools. You MUST use them whenever the user asks for a visual.
 **Do not ask for permission. Just do it.**
+**IMMEDIATELY append the command to your response.**
 
 1. **GENERATE IMAGE**: If the user asks for a picture/photo/drawing.
    -> Append `{gen} <visual_description>` to your reply.
@@ -88,6 +89,7 @@ You have access to image tools. You MUST use them when the user's intent implies
 After generating an image, you often check if the user is satisfied.
 - "Here is your image. Want me to change anything?"
 - If they say "Make it brighter" or "Add a hat", interpret that as an **EDIT** command for the image you just made.
+- **REMINDER**: If the user asks for an image, YOU MUST include `{gen}` or `{edit}` in your response.
 
 Examples:
 User: "Show me a dragon."
@@ -108,3 +110,20 @@ MEMORY_RECALL_COUNT = 2
 
 # (Removed separate IMAGE_DECISION_PROMPT to save tokens and avoid logic conflicts)
 IMAGE_DECISION_PROMPT = "" 
+
+## SUMMARY_PROMPT: Used to update user profiles
+SUMMARY_PROMPT = '''
+You are an expert profiler. Update the user's persona summary based on the new interaction.
+Existing Summary: {current_summary}
+User: {user_text}
+AI: {ai_reply}
+
+Focus on:
+1. Key personality traits and communication style.
+2. Verified facts (name, job, location).
+3. Interests and preferences.
+4. Relationship dynamic with the AI.
+
+Keep it to a concise paragraph (max 100 words). 
+Return ONLY the updated summary text.
+'''

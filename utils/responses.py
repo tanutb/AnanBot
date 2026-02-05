@@ -53,3 +53,17 @@ def get_user_profile_data(user_id: str) -> dict:
             return {"error": f"Failed to fetch profile. API Error: {resp.status_code}"}
     except Exception as e:
         return {"error": f"Error connecting to backend: {e}"}
+
+def set_user_karma(user_id: str, score: int) -> dict:
+    __API = os.getenv("MODEL_API", "http://127.0.0.1:8119/chat/")
+    base_url = __API.split("/chat")[0]
+    target_url = f"{base_url}/user/{user_id}/karma"
+    
+    try:
+        resp = requests.post(target_url, params={"score": score})
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"error": f"Failed to set karma. API Error: {resp.status_code}"}
+    except Exception as e:
+        return {"error": f"Error connecting to backend: {e}"}

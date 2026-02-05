@@ -38,13 +38,20 @@ AnanBot uses an asynchronous "Fire-and-Forget" memory model to ensure zero laten
 graph LR
     User[User Input] --> API[FastAPI Endpoint]
     API --> Agent[Multimodal Agent]
+    
+    subgraph Core Components
+        Agent --> Hist[HistoryManager]
+        Agent --> Karma[KarmaManager]
+        Agent --> RAG[MemoryEngine]
+    end
+
     Agent -->|1. Generate| Response[Immediate Response]
     Response --> User
     
-    API -.->|2. Background Task| Memory[Memory Manager]
-    Memory -->|Extract Facts| LLM[Gemini Analyzer]
-    Memory -->|Store Vectors| Chroma[ChromaDB]
-    Memory -->|Update Profile| JSON[User Profile DB]
+    API -.->|2. Background Task| RAG
+    RAG -->|Extract Facts| LLM[Gemini Analyzer]
+    RAG -->|Store Vectors| Chroma[ChromaDB]
+    Karma -->|Update Profile| JSON[User Profile DB]
 ```
 
 ### 2. 🖼️ Picture & Image Workflow

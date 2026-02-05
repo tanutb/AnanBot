@@ -1,9 +1,10 @@
 from typing import Final
 import os
 import requests
+import discord
 from dotenv import load_dotenv
-from discord import Intents, Client, Message, File, ChannelType, Embed, Color, Interaction, app_commands
-from utils.responses import get_response, get_user_profile_data
+from discord import Intents, Message, File, ChannelType, Embed, Color, Interaction, app_commands
+from utils.responses import get_response, get_user_profile_data, set_user_karma
 import base64
 from PIL import Image
 from io import BytesIO
@@ -14,11 +15,24 @@ from config import DISCORD_TOKEN
 load_dotenv()
 TOKEN: Final[str] = os.getenv("DISCORD_TOKEN")
 
-# STEP 1: BOT SETUP
-intents: Intents = Intents.default()
-intents.message_content = True  # NOQA
-client: Client = Client(intents=intents)
-tree = app_commands.CommandTree(client)
+# STEP 1: BOT SETUP - Using SubclassPattern for Better Sync
+class AnanBotClient(discord.Client):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(intents=intents)
+        # We attach the tree to 'self'
+        self.tree = app_commands.CommandTree(self)
+
+    async def setup_hook(self):
+        # This copies the global commands over to your guild.
+        # For production, you might want to sync globally (remove guild=...) 
+        # but it takes up to an hour. For now, we sync globally on startup.
+        print("Syncing commands globally...")
+        await self.tree.sync()
+        print("Commands synced!")
+
+client = AnanBotClient()
 
 # STEP 2: MESSAGE FUNCTIONALITY
 async def send_message(message: Message, user_message: str, is_mentioned: bool) -> None:
@@ -30,9 +44,6 @@ async def send_message(message: Message, user_message: str, is_mentioned: bool) 
         if message.attachments:
             for attachment in message.attachments:
                 if attachment.filename.lower().endswith(('png', 'jpg', 'jpeg')):
-                    # Use the path where on_message saved it, or save it here if not saved (on_message saves it)
-                    # We assume on_message saved it to ./downloads/filename
-                    # To be safe, let's just use the path logic consistent with on_message
                     path = f"./downloads/{attachment.filename}"
                     image_paths.append(path)
         
@@ -49,14 +60,12 @@ async def send_message(message: Message, user_message: str, is_mentioned: bool) 
         )
         response: str = get_response(chat_request)
 
-        # Handle Response (Always to channel)
         target = message.channel
 
         if isinstance(response, dict) and "response" in response:
             text_response = response["response"]
             
             if "img" in response and response["img"]:
-                # Decode and send image
                 image_data = base64.b64decode(response['img'])
                 image_bytes = BytesIO(image_data)
                 
@@ -74,15 +83,16 @@ async def send_message(message: Message, user_message: str, is_mentioned: bool) 
 # STEP 3: HANDLING THE STARTUP FOR OUR BOT
 @client.event
 async def on_ready() -> None:
-    await tree.sync()
     print(f'{client.user} is now running!')
 
-@tree.command(name="profile", description="Check your Karma and Persona summary")
+# --- SLASH COMMANDS (Attached to client.tree) ---
+
+@client.tree.command(name="profile", description="Check your Karma and Persona summary")
 async def profile_command(interaction: Interaction):
     user_id = str(interaction.user.id)
     username = str(interaction.user.display_name)
     
-    await interaction.response.defer() # Defer in case API is slow
+    await interaction.response.defer()
     
     data = get_user_profile_data(user_id)
     
@@ -100,25 +110,52 @@ async def profile_command(interaction: Interaction):
     
     await interaction.followup.send(embed=embed)
 
+@client.tree.command(name="setkarma", description="Set a user's Karma score (Admin/Debug)")
+@app_commands.describe(user="The user to modify", score="The new karma score")
+async def set_karma_command(interaction: Interaction, user: discord.User, score: int):
+    user_id = str(user.id)
+    username = user.display_name
+    
+    await interaction.response.defer()
+    
+    result = set_user_karma(user_id, score)
+    
+    if "error" in result:
+        await interaction.followup.send(f"❌ Failed: {result['error']}")
+    else:
+        await interaction.followup.send(f"✅ Updated Karma for **{username}** to `{score}`.")
+
+@client.tree.command(name="resetkarma", description="Reset a user's Karma score to 0")
+@app_commands.describe(user="The user to reset")
+async def reset_karma_command(interaction: Interaction, user: discord.User):
+    user_id = str(user.id)
+    username = user.display_name
+    
+    await interaction.response.defer()
+    
+    result = set_user_karma(user_id, 0)
+    
+    if "error" in result:
+        await interaction.followup.send(f"❌ Failed: {result['error']}")
+    else:
+        await interaction.followup.send(f"🔄 Reset Karma for **{username}** to `0`.")
+
 
 # STEP 4: HANDLING INCOMING MESSAGES
 @client.event
 async def on_message(message: Message) -> None:
-    # 1. Ignore messages from the bot itself
     if message.author == client.user:
         return
     
-    # 2. Ignore Private Messages (DMs)
     if message.guild is None:
         return
 
-    # COMMAND: !profile (Get Karma & Persona) - Fallback/Legacy
+    # COMMAND: !profile
     if message.content.strip().lower() == "!profile":
         user_id = str(message.author.id)
         username = str(message.author.display_name)
         
         data = get_user_profile_data(user_id)
-        
         if "error" in data:
             await message.channel.send(data["error"])
             return
@@ -134,11 +171,44 @@ async def on_message(message: Message) -> None:
         await message.channel.send(embed=embed)
         return
 
-    # 3. Check if Bot is Mentioned or Replied to
+    # COMMAND: !setkarma @User <score>
+    if message.content.strip().lower().startswith("!setkarma"):
+        try:
+            parts = message.content.split()
+            if len(message.mentions) != 1 or len(parts) < 3:
+                await message.channel.send("Usage: `!setkarma @User <score>`")
+                return
+            
+            target_user = message.mentions[0]
+            new_score = int(parts[-1])
+            
+            result = set_user_karma(str(target_user.id), new_score)
+            
+            if "error" in result:
+                await message.channel.send(f"❌ Failed: {result['error']}")
+            else:
+                await message.channel.send(f"✅ Updated Karma for **{target_user.display_name}** to `{new_score}`.")
+        except ValueError:
+             await message.channel.send("❌ Error: Score must be an integer.")
+        return
+
+    # COMMAND: !resetkarma @User
+    if message.content.strip().lower().startswith("!resetkarma"):
+        if len(message.mentions) != 1:
+            await message.channel.send("Usage: `!resetkarma @User`")
+            return
+            
+        target_user = message.mentions[0]
+        result = set_user_karma(str(target_user.id), 0)
+        
+        if "error" in result:
+            await message.channel.send(f"❌ Failed: {result['error']}")
+        else:
+            await message.channel.send(f"🔄 Reset Karma for **{target_user.display_name}** to `0`.")
+        return
+
     is_mentioned = client.user in message.mentions
     is_reply = (message.reference is not None and message.reference.resolved and message.reference.resolved.author == client.user)
-    
-    # "is_mentioned" flag for the model (True if tagged OR replied to)
     is_targeted = is_mentioned or is_reply
 
     username: str = str(message.author)
@@ -147,21 +217,15 @@ async def on_message(message: Message) -> None:
 
     print(f'[{channel}] {username}: "{user_message}" (Tagged: {is_targeted})')
 
-    # 4. Clean the Message: Remove the bot's mention tag <@ID> if present
     if is_mentioned:
-        # Remove the mention string (e.g. <@123456789>)
         user_message = user_message.replace(f'<@{client.user.id}>', '').strip()
-        # Also handle nickname mentions <@!ID>
         user_message = user_message.replace(f'<@!{client.user.id}>', '').strip()
 
-    # Check if the message contains attachments
     if message.attachments:
         for attachment in message.attachments:
             if attachment.filename.lower().endswith(('png', 'jpg', 'jpeg', 'gif', 'bmp')):
                 print(f"Image received from {username}: {attachment.url}")
-                # Create the downloads directory if it doesn't exist
                 os.makedirs("./downloads", exist_ok=True)
-                # You can download the image if needed
                 await attachment.save(f"./downloads/{attachment.filename}")
                 print(f"Image saved as ./downloads/{attachment.filename}")
                 
@@ -170,7 +234,6 @@ async def on_message(message: Message) -> None:
 # STEP 5: MAIN ENTRY POINT
 def main() -> None:
     client.run(token=TOKEN)
-
 
 if __name__ == '__main__':
     main()
