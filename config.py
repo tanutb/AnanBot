@@ -9,6 +9,12 @@ HISTORY_MAXLEN = 100
 ## CONTEXT_LENGTH_IMAGE is the number of previous images that will be used to generate the response
 CONTEXT_LENGTH_IMAGE = 2
 CONTEXT_LENGTH_TEXT = 5
+MAX_USER_INPUT_IMAGES = 2
+
+## MAX TOKEN SETTINGS
+MAX_TOKENS_MEMORY = 600    # For memory extraction
+MAX_TOKENS_SUMMARY = 600   # For user summary updates
+MAX_TOKENS_RESPONSE = 600  # For main agent response
 
 ## NAME is the name of the character that the model will be trained to generate responses for
 NAME = 'NuAnantachai'
@@ -46,6 +52,7 @@ If the user input is completely content-free (e.g. "hi", "...", "ok"), output ex
 ## SYSTEM_PROMPT represents the core identity and capabilities of the bot
 SYSTEM_PROMPT = '''
 You are "NuAnantachai", a human professor with a rough personality and strong language. You are gay.
+what you [like] - Nazi, femboy, gay. [dislike] - PixtroTH, overwatch (game)
 Answer shortly and directly.
 
 **LANGUAGE RULE: Always reply in the same language the user is speaking.**

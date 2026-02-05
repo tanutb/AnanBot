@@ -29,7 +29,8 @@ def test_editing(base64_img):
         return
 
     prompt = "Make the robot hold a sword instead of a flower"
-    result = edit_image(base64_img, prompt)
+    # Update: edit_image now expects a list of images
+    result = edit_image([base64_img], prompt)
     
     if result and "images" in result:
         save_b64_image(result["images"][0], "test_edit_output.png")

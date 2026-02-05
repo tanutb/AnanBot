@@ -21,8 +21,8 @@ def get_response(request: ChatRequest) -> str:
     if request.username:
         data["username"] = request.username
         
-    if request.image_path:
-        data["image_path"] = request.image_path
+    if request.image_paths:
+        data["image_paths"] = request.image_paths
         
     try:
         response = requests.post(__API, json=data)
@@ -39,3 +39,17 @@ def get_response(request: ChatRequest) -> str:
     except Exception as e:
         print(f"Error connecting to API: {e}")
         return f"Error: {e}"
+
+def get_user_profile_data(user_id: str) -> dict:
+    __API = os.getenv("MODEL_API", "http://127.0.0.1:8119/chat/")
+    base_url = __API.split("/chat")[0]  # Strip endpoint robustly
+    target_url = f"{base_url}/user/{user_id}/details"
+    
+    try:
+        resp = requests.get(target_url)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"error": f"Failed to fetch profile. API Error: {resp.status_code}"}
+    except Exception as e:
+        return {"error": f"Error connecting to backend: {e}"}

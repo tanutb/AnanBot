@@ -40,7 +40,7 @@ async def main():
             continue
 
         # Parse inputs
-        image_path = None
+        image_paths = []
         is_mentioned = False
         text_input = user_input
         
@@ -49,15 +49,22 @@ async def main():
             is_mentioned = True
             text_input = text_input.replace("[tag]", "").strip()
 
-        # Check for image
-        if text_input.startswith("[img:") and "]" in text_input:
-            end_idx = text_input.find("]")
-            image_path = text_input[5:end_idx].strip()
-            text_input = text_input[end_idx+1:].strip()
+        # Check for images (Loop to extract multiple [img:path])
+        while "[img:" in text_input and "]" in text_input:
+            start_idx = text_input.find("[img:")
+            end_idx = text_input.find("]", start_idx)
             
-            if not os.path.exists(image_path):
-                print(Fore.RED + f"Error: Image file '{image_path}' not found." + Style.RESET_ALL)
-                continue
+            if start_idx != -1 and end_idx != -1:
+                path = text_input[start_idx+5:end_idx].strip()
+                if os.path.exists(path):
+                    image_paths.append(path)
+                else:
+                    print(Fore.RED + f"Error: Image file '{path}' not found." + Style.RESET_ALL)
+                
+                # Remove the tag from text
+                text_input = (text_input[:start_idx] + text_input[end_idx+1:]).strip()
+            else:
+                break
         
         print(Fore.MAGENTA + "AnanBot is thinking..." + Style.RESET_ALL)
         
@@ -67,7 +74,7 @@ async def main():
             None, 
             lambda: agent.generate_text(
                 text_input, 
-                image_path, 
+                image_paths, 
                 user_id=user_id, 
                 username=username, 
                 is_mentioned=is_mentioned

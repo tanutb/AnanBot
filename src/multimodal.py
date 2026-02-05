@@ -5,8 +5,9 @@ import time
 import json
 import re
 import uuid
+import datetime
 from collections import deque
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 import chromadb
 from openai import OpenAI
@@ -25,13 +26,33 @@ from config import (
     CHROMA_DB_PATH,
     HISTORY_MAXLEN,
     CONTEXT_LENGTH_IMAGE,
-    CONTEXT_LENGTH_TEXT
+    CONTEXT_LENGTH_TEXT,
+    MAX_USER_INPUT_IMAGES,
+    MAX_TOKENS_MEMORY,
+    MAX_TOKENS_SUMMARY,
+    MAX_TOKENS_RESPONSE
 )
 from src.gemini_vision import generate_image, edit_image
 
 # Initialize colorama
 init(autoreset=True)
 load_dotenv()
+
+SUMMARY_PROMPT = '''
+You are an expert profiler. Update the user's persona summary based on the new interaction.
+Existing Summary: {current_summary}
+User: {user_text}
+AI: {ai_reply}
+
+Focus on:
+1. Key personality traits and communication style.
+2. Verified facts (name, job, location).
+3. Interests and preferences.
+4. Relationship dynamic with the AI.
+
+Keep it to a concise paragraph (max 100 words). 
+Return ONLY the updated summary text.
+'''
 
 class Multimodal:
     def __init__(self, debug: bool = False):
@@ -184,10 +205,12 @@ class Multimodal:
         
         new_score = current_score + change
         
-        self.karma_db[user_id] = {
-            "score": new_score,
-            "username": username if username else current_info.get("username", "Unknown")
-        }
+        # Update score and username, preserve other fields (like summary)
+        current_info["score"] = new_score
+        if username:
+            current_info["username"] = username
+            
+        self.karma_db[user_id] = current_info
         
         self._save_json(self.karma_file, self.karma_db)
         self.log("KARMA", f"User {user_id} ({username}) karma updated: {current_score} -> {new_score}", Fore.YELLOW)
@@ -238,15 +261,32 @@ class Multimodal:
                 dist = results['distances'][0][i] if results['distances'] else 0.0
                 mem_id = results['ids'][0][i] if results['ids'] else "unknown"
                 
+                # Get timestamp
+                meta = results['metadatas'][0][i] if results['metadatas'] else {}
+                ts = meta.get("timestamp", 0)
+                date_str = "Unknown Date"
+                if ts:
+                    date_str = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
+
                 retrieved_docs_debug.append({
                     "id": mem_id,
                     "score": dist,
-                    "content": doc[:50] + "..." 
+                    "content": doc[:50] + "...",
+                    "date": date_str
                 })
 
                 if dist < THRESHOLD:
-                    found_memories.append(doc)
-                    context_str += f"- {doc}\n"
+                    found_memories.append({
+                        "ts": ts,
+                        "date": date_str,
+                        "doc": doc
+                    })
+
+        # Sort by timestamp descending (newest first)
+        found_memories.sort(key=lambda x: x["ts"], reverse=True)
+
+        for mem in found_memories:
+            context_str += f"- [{mem['date']}] {mem['doc']}\n"
         
         if self.debug:
             print(Fore.CYAN + "\n--- RAG Retrieval Details ---")
@@ -257,12 +297,13 @@ class Multimodal:
             for item in retrieved_docs_debug:
                 status = f"{Fore.GREEN}ACCEPTED" if item['score'] < THRESHOLD else f"{Fore.RED}REJECTED"
                 print(f"  - ID: {item['id']}")
+                print(f"    Date: {item['date']}")
                 print(f"    Score: {item['score']:.4f} ({status}{Fore.CYAN})")
                 print(f"    Content: {item['content']}")
             print("-----------------------------" + Style.RESET_ALL)
 
         if found_memories:
-            context_str = f"{NAME} remembers about you:\n" + context_str + "\n"
+            context_str = f"{NAME} remembers about you (recent first):\n" + context_str + "\n"
         
         return context_str
 
@@ -292,7 +333,7 @@ class Multimodal:
             extraction = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[{"role": "user", "content": chat_content}],
-                max_tokens=200
+                max_tokens=MAX_TOKENS_MEMORY
             )
             extracted_text = extraction.choices[0].message.content
             
@@ -327,12 +368,78 @@ class Multimodal:
         except Exception as e:
             self.log("MEMORY", f"Memory storage failed: {e}", Fore.RED)
 
-    def generate_text(self, text: str, image_path: str = None, user_id: str = "default_user", username: str = None, is_mentioned: bool = False) -> Dict[str, Any]:
+    def _update_user_summary(self, user_id: str, user_text: str, ai_reply: str):
+        current_info = self.get_karma_info(user_id)
+        current_summary = current_info.get("summary", "No summary yet.")
+        
+        # Don't update for trivial inputs
+        if len(user_text) < 5:
+            return
+
+        self.log("SUMMARY", "Updating user summary...", Fore.MAGENTA)
+        
+        prompt = SUMMARY_PROMPT.format(
+            current_summary=current_summary,
+            user_text=user_text,
+            ai_reply=ai_reply
+        )
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=MAX_TOKENS_SUMMARY
+            )
+            
+            content = response.choices[0].message.content
+            if content:
+                new_summary = content.strip()
+                
+                if len(new_summary) > 5 and new_summary != current_summary:
+                    current_info["summary"] = new_summary
+                    current_info["last_interaction"] = time.time()
+                    self.karma_db[user_id] = current_info
+                    self._save_json(self.karma_file, self.karma_db)
+                    self.log("SUMMARY", f"Summary updated: {new_summary[:50]}...", Fore.GREEN)
+                else:
+                    self.log("SUMMARY", "No significant change in summary.", Fore.YELLOW)
+            else:
+                 self.log("SUMMARY", "Received empty response for summary update.", Fore.YELLOW)
+                
+        except Exception as e:
+            self.log("ERROR", f"Failed to update summary: {e}", Fore.RED)
+
+    def get_user_details(self, user_id: str) -> Dict[str, Any]:
+        """Returns the raw karma/persona data for a user."""
+        return self.get_karma_info(user_id)
+
+    def _clean_response(self, text: str) -> str:
+        """Removes potential internal artifacts or hallucinated tags."""
+        # Remove patterns like (-3$ Karma), (Karma: -5), etc.
+        # Regex explanation:
+        # \(?       Optional opening parenthesis
+        # [^\)]*    Any chars (non-greedy ideally, but here roughly matching content)
+        # Karma     The word Karma
+        # [^\)]*    Any chars
+        # \)?       Optional closing parenthesis
+        # We try to be specific to avoid deleting user content mentioning Karma.
+        
+        # Pattern 1: ($?NUMBER$ Karma) or similar
+        text = re.sub(r'\(?-?\d+\$?\s*Karma\)?', '', text, flags=re.IGNORECASE)
+        
+        # Pattern 2: (Karma: NUMBER)
+        text = re.sub(r'\(?Karma:\s*-?\d+\)?', '', text, flags=re.IGNORECASE)
+        
+        return text.strip()
+
+    def generate_response(self, text: str, image_paths: List[str] = [], user_id: str = "default_user", username: str = None, is_mentioned: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         if username:
             self.usernames[user_id] = username
 
         history = self.get_user_history(user_id)
-        current_karma = self.get_karma(user_id)
+        current_karma_info = self.get_karma_info(user_id)
+        current_karma = current_karma_info.get("score", 0)
+        user_summary = current_karma_info.get("summary", "No summary yet.")
         
         # 1. RAG Retrieval
         context_injection = self.retrieve_context(text, user_id)
@@ -351,7 +458,9 @@ class Multimodal:
         elif current_karma >= 5:
             karma_instruction += "This is a good user. Be helpful."
 
-        user_context_instruction = f"\nYou are talking to User ID: {user_id}{user_name_info}. <@{user_id}>.\n{behavior_instruction}\n{karma_instruction}"
+        summary_instruction = f"\nUser Persona Summary: {user_summary}"
+
+        user_context_instruction = f"\nYou are talking to User ID: {user_id}{user_name_info}. <@{user_id}>.\n{behavior_instruction}\n{karma_instruction}\n{summary_instruction}\nIMPORTANT: Use the user's name ({username}) frequently in your response if known."
         
         system_content = SYSTEM_PROMPT + user_context_instruction + "\n" + context_injection
         messages = [{"role": "system", "content": system_content}]
@@ -391,23 +500,30 @@ class Multimodal:
         user_content = []
         user_content.append({"type": "text", "text": text})
         
-        base64_input_image = None
-        input_image_disk_path = None
+        base64_input_images = []
+        input_image_disk_paths = []
         
-        if image_path:
-            self.log("INPUT", f"Processing input image: {image_path}", Fore.BLUE)
-            base64_input_image = self._encode_image(image_path)
-            # Save to persistent disk
-            input_image_disk_path = self._save_image_to_disk(base64_input_image)
-            # Track
-            self._update_last_images(user_id, input_image_disk_path)
+        if image_paths:
+            # Enforce Limit
+            processing_paths = image_paths[:MAX_USER_INPUT_IMAGES]
             
-            user_content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{base64_input_image}"
-                }
-            })
+            for img_path in processing_paths:
+                self.log("INPUT", f"Processing input image: {img_path}", Fore.BLUE)
+                b64 = self._encode_image(img_path)
+                if b64:
+                    base64_input_images.append(b64)
+                    # Save to persistent disk
+                    saved_path = self._save_image_to_disk(b64)
+                    input_image_disk_paths.append(saved_path)
+                    # Track
+                    self._update_last_images(user_id, saved_path)
+                    
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64}"
+                        }
+                    })
             
         messages.append({"role": "user", "content": user_content})
 
@@ -420,7 +536,7 @@ class Multimodal:
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
-                max_tokens=800
+                max_tokens=MAX_TOKENS_RESPONSE
             )
             reply = response.choices[0].message.content
             if reply is None:
@@ -429,7 +545,7 @@ class Multimodal:
         except Exception as e:
             err_msg = f"Error communicating with AI: {e}"
             self.log("ERROR", err_msg, Fore.RED)
-            return {"response": err_msg}
+            return {"response": err_msg}, {}
 
         # 4. Check for Triggers
         img_response = None
@@ -442,6 +558,9 @@ class Multimodal:
         elif "{karma-}" in final_reply:
             self.update_karma(user_id, -1, username)
             final_reply = final_reply.replace("{karma-}", "").strip()
+
+        # Clean artifacts
+        final_reply = self._clean_response(final_reply)
 
         # IMAGE GENERATION / EDITING
         gen_match = re.search(r"\{gen\}\s*(.+)", final_reply, re.IGNORECASE | re.DOTALL)
@@ -471,29 +590,34 @@ class Multimodal:
             keywords = edit_match.group(1).strip()
             final_reply = final_reply.replace(edit_match.group(0), "").strip()
 
-            # Logic: Use input image OR fallback to last known images
-            target_image_b64 = None
+            # Logic: Use input images OR fallback to last known images
+            target_images_b64 = []
             
-            if base64_input_image:
-                target_image_b64 = base64_input_image
+            if base64_input_images:
+                target_images_b64 = base64_input_images
             else:
                 # Heuristic: Check text for clues like "previous", "first", "old"
                 last_paths = self.last_images.get(user_id, [])
-                target_path = None
                 
-                if len(last_paths) >= 2 and any(w in keywords.lower() for w in ["previous", "first", "old", "earlier"]):
-                    self.log("ACTION", "Selecting 2nd to last image based on text cue", Fore.BLUE)
-                    target_path = last_paths[0]
-                elif last_paths:
-                     target_path = last_paths[-1]
-                
-                if target_path:
-                    target_image_b64 = self._load_image_from_disk(target_path)
+                # If we have history, try to use the last 1 or 2 images based on availability
+                if last_paths:
+                    # Logic: if keywords imply "both" or "combine", take 2 if available. 
+                    # Default to last one.
+                    # Given user requirement "support image edit for 2 images", we try to feed what we have.
+                    
+                    # For now, let's just grab the last 2 if available, or last 1.
+                    # This allows the model to see them in the edit request.
+                    paths_to_load = last_paths[-2:] # Take up to last 2
+                    for p in paths_to_load:
+                        b64 = self._load_image_from_disk(p)
+                        if b64:
+                            target_images_b64.append(b64)
 
-            if target_image_b64:
-                self.log("ACTION", f"Editing image with prompt: '{keywords}'", Fore.GREEN)
+            if target_images_b64:
+                self.log("ACTION", f"Editing image(s) with prompt: '{keywords}'", Fore.GREEN)
                 try:
-                    gen_res = edit_image(target_image_b64, keywords)
+                    # Pass list of images
+                    gen_res = edit_image(target_images_b64, keywords)
                     if gen_res and 'images' in gen_res:
                         img_response = gen_res['images'][0]
                         saved_path = self._save_image_to_disk(img_response)
@@ -518,13 +642,15 @@ class Multimodal:
         # Store User Message (with Path, not Base64)
         user_msg_content = []
         user_msg_content.append({"type": "text", "text": text})
-        if input_image_disk_path:
-            user_msg_content.append({
+        
+        for p in input_image_disk_paths:
+             user_msg_content.append({
                 "type": "image_url",
                 "image_url": {
-                    "url": input_image_disk_path # Store PATH
+                    "url": p # Store PATH
                 }
             })
+
         history.append({"role": "user", "content": user_msg_content})
         
         # Store Assistant Message
@@ -536,11 +662,45 @@ class Multimodal:
         # But we track the generated image in self.last_images (paths) which is enough for editing context.
         history.append({"role": "assistant", "content": assistant_text}) 
         
-        self._save_history()
-        self._store_memory(user_id, text, final_reply)
+        # Prepare Background Data for Async Processing
+        background_data = {
+            "user_id": user_id,
+            "text": text,
+            "final_reply": final_reply,
+            "input_image_disk_paths": input_image_disk_paths
+        }
         
         result = {"response": final_reply}
         if img_response:
             result["img"] = img_response
             
+        return result, background_data
+
+    def save_memory_background(self, data: Dict[str, Any]):
+        """
+        Performs background tasks: Saving history to disk, extracting memories, and updating summary.
+        This is designed to be run asynchronously or in a background thread/task.
+        """
+        user_id = data.get("user_id")
+        text = data.get("text")
+        final_reply = data.get("final_reply")
+        input_image_disk_paths = data.get("input_image_disk_paths", [])
+
+        self._save_history()
+        
+        # Store Memory with Image Links
+        image_note = ""
+        if input_image_disk_paths:
+            image_note = f" [User sent images: {', '.join(input_image_disk_paths)}]"
+            
+        self._store_memory(user_id, text + image_note, final_reply)
+        self._update_user_summary(user_id, text, final_reply)
+
+    def generate_text(self, text: str, image_paths: List[str] = [], user_id: str = "default_user", username: str = None, is_mentioned: bool = False) -> Dict[str, Any]:
+        """
+        Legacy blocking method for generating text.
+        Calls generate_response and then synchronously runs background tasks.
+        """
+        result, bg_data = self.generate_response(text, image_paths, user_id, username, is_mentioned)
+        self.save_memory_background(bg_data)
         return result

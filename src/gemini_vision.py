@@ -92,20 +92,24 @@ def generate_image(prompt: str, **kwargs):
     ]
     return _generate_content(contents, f"Generate: {prompt}")
 
-def edit_image(base64_image: str, prompt: str, **kwargs):
+def edit_image(base64_images: list[str], prompt: str, **kwargs):
     """
-    Edits an existing image based on text prompt.
+    Edits existing image(s) based on text prompt.
     """
+    parts = [types.Part.from_text(text=prompt)]
+    
+    for b64 in base64_images:
+        parts.append(
+            types.Part.from_bytes(
+                data=base64.b64decode(b64), 
+                mime_type="image/jpeg"
+            )
+        )
+
     contents = [
         types.Content(
             role="user",
-            parts=[
-                types.Part.from_text(text=prompt),
-                types.Part.from_bytes(
-                    data=base64.b64decode(base64_image), 
-                    mime_type="image/jpeg"
-                ),
-            ],
+            parts=parts,
         ),
     ]
     return _generate_content(contents, f"Edit: {prompt}")
