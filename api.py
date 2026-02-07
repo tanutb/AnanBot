@@ -8,7 +8,21 @@ import utils
 from src.multimodal import Multimodal
 
 app = FastAPI()
-MultiModal = Multimodal(debug=True)
+MultiModal = Multimodal(debug=False)
+
+# Debug endpoint
+@app.post("/debug")
+async def set_debug_mode(mode: bool) -> JSONResponse:
+    """Endpoint to toggle debug mode for the multimodal agent.
+
+    Args:
+        mode: The desired debug status (True for ON, False for OFF).
+
+    Returns:
+        A JSONResponse containing the new debug status.
+    """
+    MultiModal.debug = mode
+    return JSONResponse(content={"debug_mode": MultiModal.debug})
 
 # Chat endpoint
 @app.post("/chat/")

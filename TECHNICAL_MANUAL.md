@@ -23,6 +23,7 @@ The `Multimodal` class acts as the central orchestrator. It has been refactored 
 - **Orchestration**: Coordinates data flow between the API, the LLM, and various managers.
 - **Intent Execution**: Detects specific intents (e.g., `{gen}`, `{edit}`, `{karma+}`) in the model's output and triggers the appropriate handlers.
 - **Response Assembly**: Combines text responses with generated images and metadata before returning them to the caller.
+- **Debug Profiling**: When `debug=True`, constructs a detailed "Debug Profile" appended to the response, showing RAG context, history usage, raw model output, and specific actions taken. This log is also mirrored to the console.
 
 ### 2. Component Managers (`src/components/`)
 The monolithic logic has been broken down into:
@@ -59,21 +60,22 @@ AnanBot uses a **Tri-Layer Memory Architecture**:
 3. **Storage**: Vectors are pushed to ChromaDB with metadata (User ID, Timestamp).
 4. **Summarization**: A separate LLM call updates the 100-word "Persona Summary" if the conversation warrants it.
 
-### 3. Image Generation Pipeline (`src/gemini_vision.py`)
+### 4. Image Generation & Editing Pipeline (`src/gemini_vision.py`)
 AnanBot has moved away from Stable Diffusion to a native **Gemini Nano Banana** workflow.
 
 - **Generation (`{gen}`)**:
   - Uses `gemini-3-pro-image-preview`.
   - Prompts are fed directly from the agent's creativity.
   - Output is base64 encoded, saved to `./memories/images/`, and returned.
+  - **Error Handling**: Captures explicit text refusals (e.g., safety blocks) from the model to provide clear feedback to the user.
 
 - **Editing (`{edit}`)**:
-  - Requires a "Source Image".
-  - The system looks for `MAX_USER_INPUT_IMAGES` in the current request.
-  - If none are found, it looks back at `last_images` in the user's history.
-  - Sends `[Image, Prompt]` to the model for pixel-level modification.
+  - **Strict Source Prioritization**: 
+    1.  **User Input (Highest)**: If the user uploads an image or replies to one, the bot uses **ONLY** that image. Other history images are ignored.
+    2.  **History Fallback (Lowest)**: If no input is provided, the bot uses **ONLY** the single most recent image from history.
+  - **Awareness**: The bot appends a system message (visible in Debug Mode) confirming the source of the edited image (e.g., `[System: Editing 1 image(s) from User Input]`).
 
-### 4. Karma System
+### 5. Karma System
 A simplified social credit system that influences the bot's system prompt.
 - **Storage**: `memories/karma.json`.
 - **Thresholds**:
@@ -99,6 +101,12 @@ Main interaction endpoint.
   ```
 - **Output**: JSON containing the text response and optionally a base64 encoded image.
 - **Behavior**: Spawns a `BackgroundTasks` to handle memory storage, ensuring sub-second response times.
+
+### `POST /debug`
+Endpoint to toggle the agent's debug mode.
+- **Input**: Query parameter `mode` (boolean).
+- **Output**: JSON with the new debug status.
+- **Purpose**: Enables verbose logging in chat responses (RAG context, raw output, etc.).
 
 ### `GET /user/{user_id}/details`
 Debug endpoint to inspect a user's profile.

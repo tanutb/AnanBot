@@ -12,7 +12,8 @@ from config import (
     CONTEXT_LENGTH_TEXT,
     MAX_USER_INPUT_IMAGES,
     MAX_TOKENS_RESPONSE,
-    MODEL_NAME
+    MODEL_NAME,
+    DEBUG_LOG_LENGTH
 )
 from src.gemini_vision import generate_image, edit_image
 from src.components.common import log
@@ -77,6 +78,16 @@ class Multimodal:
             - A dictionary with the 'response' text and optional 'img' (base64).
             - A dictionary containing background data for memory processing.
         """
+        # --- DEBUG PREPARATION ---
+        debug_info = {
+            "user": f"{username} ({user_id})",
+            "input_text": text,
+            "input_images": len(image_paths),
+            "rag_context": "None",
+            "history_used": 0,
+            "actions": []
+        }
+
         if context_id is None:
             context_id = user_id
 
@@ -91,9 +102,15 @@ class Multimodal:
         karma_score = self.karma_manager.get_score(user_id)
         user_summary = self.karma_manager.get_info(user_id).get("summary", "No summary yet.")
         
+        debug_info["karma"] = karma_score
+        debug_info["summary"] = user_summary[:50] + "..." if len(user_summary) > 50 else user_summary
+
         # 1. RAG Retrieval (User specific + Context specific?)
         # For now, retrieve based on user to keep personal memories personal
         context_injection = self.memory_engine.retrieve_context(text, user_id)
+        
+        if "NO RELEVANT CONTEXT FOUND" not in context_injection and context_injection.strip():
+             debug_info["rag_context"] = context_injection[:100] + "..." if len(context_injection) > 100 else context_injection
         
         # 2. Build Messages
         user_name_info = f" (Name: {username})" if username else ""
@@ -118,6 +135,8 @@ class Multimodal:
         
         # --- RECONSTRUCT HISTORY FOR API ---
         short_term_context = list(history)[-CONTEXT_LENGTH_TEXT:]
+        debug_info["history_used"] = len(short_term_context)
+
         for msg in short_term_context:
             role = msg["role"]
             content = msg["content"]
@@ -210,10 +229,12 @@ class Multimodal:
                 self.karma_manager.update_score(user_id, 1, username)
                 final_reply = final_reply.replace("{karma+}", "").strip()
                 action_taken = True
+                debug_info["actions"].append("Karma +1")
             elif "{karma-}" in final_reply:
                 self.karma_manager.update_score(user_id, -1, username)
                 final_reply = final_reply.replace("{karma-}", "").strip()
                 action_taken = True
+                debug_info["actions"].append("Karma -1")
 
             final_reply = self._clean_response(final_reply)
 
@@ -226,6 +247,7 @@ class Multimodal:
                 log("ACTION", "Detected Image Generation Intent", Fore.GREEN)
                 keywords = gen_match.group(1).strip()
                 final_reply = final_reply.replace(gen_match.group(0), "").strip()
+                debug_info["actions"].append(f"Gen Image: {keywords[:100]}...")
                 
                 try:
                     gen_res = generate_image(keywords)
@@ -247,25 +269,34 @@ class Multimodal:
                 log("ACTION", "Detected Image Edit Intent", Fore.GREEN)
                 keywords = edit_match.group(1).strip()
                 final_reply = final_reply.replace(edit_match.group(0), "").strip()
+                debug_info["actions"].append(f"Edit Image: {keywords[:100]}...")
 
                 target_images_b64 = []
+                source_info = []
                 
-                # 1. Add Current Uploads (High Priority)
+                # 1. Explicit Input (Attachments or Reply) - HIGHEST PRIORITY
                 if base64_input_images:
+                    # User explicitly provided images (via upload or reply). 
+                    # Use ONLY these. Do not mix with history.
                     target_images_b64.extend(base64_input_images)
+                    source_info.append("User Input/Reply")
                 
-                # 2. Add Recent History (Context - SHARED)
-                # Use context_id to retrieve images from ANYONE in the channel
-                slots_left = 3 - len(target_images_b64)
-                if slots_left > 0:
+                # 2. Implicit Context (History) - FALLBACK ONLY
+                else:
+                    # User didn't provide an image, so they must be referring to the last one.
+                    # User said "should only one". So we fetch the single most recent image.
                     last_paths = self.history_manager.get_last_images(context_id)
-                    paths_to_load = last_paths[-slots_left:] 
-                    for p in paths_to_load:
-                        b64 = self.image_handler.load_image_from_disk(p)
+                    if last_paths:
+                        # Get only the very last one
+                        last_path = last_paths[-1]
+                        b64 = self.image_handler.load_image_from_disk(last_path)
                         if b64:
                             target_images_b64.append(b64)
+                            source_info.append("Chat History (Last Image)")
 
                 if target_images_b64:
+                    source_str = " & ".join(source_info)
+                    
                     try:
                         gen_res = edit_image(target_images_b64, keywords)
                         if gen_res and 'images' in gen_res:
@@ -318,28 +349,31 @@ class Multimodal:
             "input_image_disk_paths": input_image_disk_paths
         }
         
+        # --- APPEND COMPREHENSIVE DEBUG LOG IF ENABLED ---
+        if self.debug:
+            actions_str = ", ".join(debug_info["actions"]) if debug_info["actions"] else "None"
+            
+            # Format the log nicely
+            debug_log = (
+                f"\n\n🛠️ **Debug Profile**\n"
+                f"👤 **User:** `{debug_info['user']}` | ☯️ **Karma:** `{debug_info['karma']}`\n"
+                f"📥 **Input:** `{debug_info['input_text'][:50]}...`\n"
+                f"🖼️ **Images:** `{debug_info['input_images']} provided`\n\n"
+                f"🧠 **Memory (RAG)**\n"
+                f"> {debug_info['rag_context']}\n\n"
+                f"🤖 **Model Interaction**\n"
+                f"**History:** `{debug_info['history_used']}` messages used.\n"
+                f"**Raw Response:** `{reply[:DEBUG_LOG_LENGTH]}...` (Reason: `{finish_reason}`)\n\n"
+                f"⚡ **Actions Taken**\n"
+                f"> {actions_str}"
+            )
+            final_reply += debug_log
+            
+            # Also print to console
+            print(Fore.YELLOW + debug_log.replace("**", "").replace("`", "") + Fore.RESET)
+        
         result = {"response": final_reply}
         if img_response:
             result["img"] = img_response
             
         return result, background_data
-
-    def save_memory_background(self, data: Dict[str, Any]) -> None:
-        """Performs background tasks: Saving history, extracting memories, and updating summary.
-
-        Args:
-            data: A dictionary containing 'user_id', 'text', 'final_reply', and 'input_image_disk_paths'.
-        """
-        user_id = data.get("user_id")
-        text = data.get("text")
-        final_reply = data.get("final_reply")
-        input_image_disk_paths = data.get("input_image_disk_paths", [])
-
-        self.history_manager.save()
-        
-        image_note = ""
-        if input_image_disk_paths:
-            image_note = f" [User sent images: {', '.join(input_image_disk_paths)}]"
-            
-        self.memory_engine.store_memory(self.client, self.model_name, user_id, text + image_note, final_reply)
-        self.karma_manager.update_user_summary(self.client, self.model_name, user_id, text, final_reply)

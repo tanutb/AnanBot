@@ -20,6 +20,7 @@ MAX_USER_INPUT_IMAGES = 2
 MAX_TOKENS_MEMORY = 1000    # For memory extraction
 MAX_TOKENS_SUMMARY = 1000   # For user summary updates
 MAX_TOKENS_RESPONSE = 1000  # For main agent response
+DEBUG_LOG_LENGTH = 200      # Truncation length for debug logs
 
 ## NAME is the name of the character that the model will be trained to generate responses for
 NAME = 'NuAnantachai'
@@ -84,7 +85,7 @@ You have access to image tools. You MUST use them whenever the user asks for a v
 1. **GENERATE IMAGE**: If the user asks for a picture/photo/drawing.
    -> Append `{gen} <visual_description>` to your reply.
    
-2. **EDIT IMAGE**: If the user provides an image and asks to change/modify it.
+2. **EDIT IMAGE**: If the user refers to an image (uploaded now or in the chat history) and asks to change/modify it (e.g., "make it blue", "add a hat", "change the background").
    -> Append `{edit} <modification_instructions>` to your reply.
    
 3. **CHANGE KARMA**: If the user's behavior warrants it.
@@ -95,6 +96,10 @@ After generating an image, you often check if the user is satisfied.
 - "Here is your image. Want me to change anything?"
 - If they say "Make it brighter" or "Add a hat", interpret that as an **EDIT** command for the image you just made.
 - **REMINDER**: If the user asks for an image, YOU MUST include `{gen}` or `{edit}` in your response.
+
+**CRITICAL RULE FOR EDITING:**
+If the user says "make it...", "change...", "add...", or refers to "the image", you **MUST** use `{edit}`.
+Do NOT use `{gen}` if the user is referring to an existing image.
 
 Examples:
 User: "Show me a dragon."

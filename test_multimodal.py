@@ -16,7 +16,7 @@ class TestMultimodal(unittest.TestCase):
         """Test basic text generation."""
         print("\n--- Testing Basic Text Generation ---")
         prompt = "Hello, who are you?"
-        response = self.agent.generate_text(prompt, user_id=self.user_id)
+        response, _ = self.agent.generate_response(prompt, user_id=self.user_id)
         
         print(f"Prompt: {prompt}")
         print(f"Response: {response.get('response')}")
@@ -32,12 +32,12 @@ class TestMultimodal(unittest.TestCase):
         # Turn 1: Tell the agent a fact
         fact = "My favorite color is bright neon green."
         print(f"User: {fact}")
-        self.agent.generate_text(fact, user_id=self.user_id)
+        self.agent.generate_response(fact, user_id=self.user_id)
         
         # Turn 2: Ask about the fact
         question = "What is my favorite color?"
         print(f"User: {question}")
-        response = self.agent.generate_text(question, user_id=self.user_id)
+        response, _ = self.agent.generate_response(question, user_id=self.user_id)
         
         print(f"Response: {response.get('response')}")
         
@@ -54,7 +54,7 @@ class TestMultimodal(unittest.TestCase):
         # We mock the actual generation to avoid API costs/latency in unit tests,
         # but here we are testing the full flow integration so we let it run.
         # Note: This requires valid API keys and might take a moment.
-        response = self.agent.generate_text(prompt, user_id=self.user_id)
+        response, _ = self.agent.generate_response(prompt, user_id=self.user_id)
         
         print(f"Response Text: {response.get('response')}")
         if "img" in response:

@@ -4,7 +4,7 @@ import requests
 import discord
 from dotenv import load_dotenv
 from discord import Intents, Message, File, ChannelType, Embed, Color, Interaction, app_commands
-from utils.responses import get_response, get_user_profile_data, set_user_karma
+from utils.responses import get_response, get_user_profile_data, set_user_karma, set_bot_debug_mode
 import base64
 from PIL import Image
 from io import BytesIO
@@ -54,17 +54,20 @@ async def send_message(message: Message, user_message: str, is_mentioned: bool) 
                 if ref_msg.attachments:
                     for attachment in ref_msg.attachments:
                         if attachment.filename.lower().endswith(('png', 'jpg', 'jpeg')):
-                            path = f"./downloads/{attachment.filename}"
-                            # Only add if not already downloaded (or re-download to be safe/simple)
-                            if not os.path.exists(path):
-                                await attachment.save(path)
+                            # Use attachment ID to ensure uniqueness
+                            filename = f"{attachment.id}_{attachment.filename}"
+                            path = f"./downloads/{filename}"
+                            await attachment.save(path)
                             image_paths.append(path)
 
         # 2. Handle Current Message Images
         if message.attachments:
             for attachment in message.attachments:
                 if attachment.filename.lower().endswith(('png', 'jpg', 'jpeg')):
-                    path = f"./downloads/{attachment.filename}"
+                    # Use attachment ID to ensure uniqueness
+                    filename = f"{attachment.id}_{attachment.filename}"
+                    path = f"./downloads/{filename}"
+                    await attachment.save(path)
                     image_paths.append(path)
         
         mtext = reply_context + user_message
@@ -107,6 +110,20 @@ async def on_ready() -> None:
     print(f'{client.user} is now running!')
 
 # --- SLASH COMMANDS (Attached to client.tree) ---
+
+@client.tree.command(name="debug", description="Toggle Debug Mode")
+@app_commands.describe(mode="True/False or On/Off")
+async def debug_command(interaction: Interaction, mode: str):
+    await interaction.response.defer()
+    
+    is_on = mode.lower() in ["true", "on", "1", "yes"]
+    result = set_bot_debug_mode(is_on)
+    
+    if "error" in result:
+        await interaction.followup.send(f"❌ Failed: {result['error']}")
+    else:
+        status = "ON" if result.get("debug_mode") else "OFF"
+        await interaction.followup.send(f"🔧 Debug Mode is now **{status}**")
 
 @client.tree.command(name="profile", description="Check your Karma and Persona summary")
 async def profile_command(interaction: Interaction):
@@ -169,6 +186,25 @@ async def on_message(message: Message) -> None:
         return
     
     if message.guild is None:
+        return
+
+    # COMMAND: !debug <on/off>
+    if message.content.strip().lower().startswith("!debug"):
+        parts = message.content.split()
+        if len(parts) < 2:
+            await message.channel.send("Usage: `!debug <on/off>`")
+            return
+            
+        mode_str = parts[1].lower()
+        is_on = mode_str in ["on", "true", "1", "yes"]
+        
+        result = set_bot_debug_mode(is_on)
+        
+        if "error" in result:
+            await message.channel.send(f"❌ Failed: {result['error']}")
+        else:
+            status = "ON" if result.get("debug_mode") else "OFF"
+            await message.channel.send(f"🔧 Debug Mode is now **{status}**")
         return
 
     # COMMAND: !profile

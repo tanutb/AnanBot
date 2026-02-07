@@ -62,6 +62,7 @@ def _generate_content(contents: List[types.Content], prompt_desc: str) -> Option
     
     try:
         generated_image_b64 = None
+        text_response = ""
         
         for chunk in client.models.generate_content_stream(
             model=model,
@@ -77,9 +78,12 @@ def _generate_content(contents: List[types.Content], prompt_desc: str) -> Option
                 continue
             
             for part in chunk.candidates[0].content.parts:
+                if part.text:
+                    text_response += part.text
                 if part.inline_data and part.inline_data.data:
                     image_bytes = part.inline_data.data
                     generated_image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+                    # If we found an image, we can stop looking (unless we want multi-image)
                     break
             
             if generated_image_b64:
@@ -88,8 +92,9 @@ def _generate_content(contents: List[types.Content], prompt_desc: str) -> Option
         if generated_image_b64:
             return {"images": [generated_image_b64]}
         else:
-            print("No image data found in response.")
-            return {"error": "No image data found in Gemini response."}
+            error_msg = text_response.strip() if text_response else "No image data found in Gemini response."
+            print(f"Generation failed. Model response: {error_msg}")
+            return {"error": error_msg}
 
     except Exception as e:
         print(f"Error calling Gemini: {e}")

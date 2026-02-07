@@ -12,10 +12,15 @@
 - **Long-term Recall**: Utilizes **ChromaDB** to store and retrieve specific facts about users (e.g., "You remember I like pizza").
 - **Adaptive Persona**: Dynamically updates a summary of the user's personality and preferences after every interaction.
 
+### 🛠️ **Developer Tools (Debug Mode)**
+- **Real-time Insights**: Toggle debug mode to see a detailed "Debug Profile" appended to every response.
+- **Transparency**: View the exact RAG context used, history depth, raw model output, and specific actions taken (e.g., "Gen Image", "Karma +1").
+- **Console Mirroring**: Debug logs are printed to both the chat interface and the server console for easy monitoring.
+
 ### 🎨 **Visual Creativity (Image Workflow)**
 - **Image Generation**: Detects `{gen}` intent to create stunning visuals on the fly.
-- **Image Editing**: Detects `{edit}` intent to modify existing images based on natural language instructions.
-- **Powered by GEMINI NANO BANANA**: Utilizing the `gemini-3-pro-image-preview` model, this engine delivers high-fidelity, rapid image synthesis and editing without external dependencies like Stable Diffusion. It handles complex prompts and visual transformations natively within the Gemini ecosystem.
+- **Image Editing**: Detects `{edit}` intent to modify existing images. **Strict Source Control**: Prioritizes explicit user input/replies. If no input is provided, falls back to the *single most recent* history image.
+- **Powered by GEMINI NANO BANANA**: Utilizing the `gemini-3-pro-image-preview` model for high-fidelity synthesis.
 
 ### ⚡ **High-Performance Architecture**
 - **Asynchronous Core**: Decoupled response generation from memory storage. Users get **instant replies** while the bot creates memories in the background.
@@ -116,6 +121,11 @@ Run the bot to interact via Discord channels.
 ```bash
 python discord_bot.py
 ```
+**Commands:**
+- `!profile`: Check your current Karma and Persona.
+- `!debug on` / `!debug off`: Toggle detailed debug logging in chat.
+- `/debug mode:True`: Slash command alternative for toggling debug mode.
+- Reply to an image with "make it blue" to edit it instantly.
 
 ### 2. FastAPI Server (Backend Mode)
 Start the API server for external integrations.

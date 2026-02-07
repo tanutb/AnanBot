@@ -95,3 +95,25 @@ def set_user_karma(user_id: str, score: int) -> Dict[str, Any]:
             return {"error": f"Failed to set karma. API Error: {resp.status_code}"}
     except Exception as e:
         return {"error": f"Error connecting to backend: {e}"}
+
+def set_bot_debug_mode(mode: bool) -> Dict[str, Any]:
+    """Toggles the debug mode of the bot via the model API.
+
+    Args:
+        mode: True to enable debug mode, False to disable.
+
+    Returns:
+        A dictionary containing the API response or an error message.
+    """
+    __API = os.getenv("MODEL_API", "http://127.0.0.1:8119/chat/")
+    base_url = __API.split("/chat")[0]
+    target_url = f"{base_url}/debug"
+    
+    try:
+        resp = requests.post(target_url, params={"mode": mode})
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"error": f"Failed to toggle debug mode. API Error: {resp.status_code}"}
+    except Exception as e:
+        return {"error": f"Error connecting to backend: {e}"}
