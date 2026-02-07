@@ -60,6 +60,7 @@ class Multimodal:
         """Removes potential internal artifacts or hallucinated tags."""
         text = re.sub(r'\(?-?\d+\$?\s*Karma\)?', '', text, flags=re.IGNORECASE)
         text = re.sub(r'\(?Karma:\s*-?\d+\)?', '', text, flags=re.IGNORECASE)
+        text = text.replace("[Generated Image]", "")
         return text.strip()
 
     def generate_response(self, text: str, image_paths: List[str] = [], user_id: str = "default_user", context_id: str = None, username: str = None, is_mentioned: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
