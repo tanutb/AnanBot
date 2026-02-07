@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict, Any, Union
 import requests
 import os
 from dotenv import load_dotenv
@@ -6,7 +6,15 @@ from utils import ChatRequest
 
 load_dotenv()
 
-def get_response(request: ChatRequest) -> str:
+def get_response(request: ChatRequest) -> Union[Dict[str, Any], str]:
+    """Sends a chat request to the model API and retrieves the response.
+
+    Args:
+        request: The ChatRequest object containing input data.
+
+    Returns:
+        The JSON response from the API as a dictionary, or an error message string.
+    """
     __API = os.getenv("MODEL_API")
     if not __API:
         return "Error: MODEL_API not set in .env"
@@ -40,7 +48,15 @@ def get_response(request: ChatRequest) -> str:
         print(f"Error connecting to API: {e}")
         return f"Error: {e}"
 
-def get_user_profile_data(user_id: str) -> dict:
+def get_user_profile_data(user_id: str) -> Dict[str, Any]:
+    """Fetches user profile data from the model API.
+
+    Args:
+        user_id: The unique identifier of the user.
+
+    Returns:
+        A dictionary containing the user's profile data or an error message.
+    """
     __API = os.getenv("MODEL_API", "http://127.0.0.1:8119/chat/")
     base_url = __API.split("/chat")[0]  # Strip endpoint robustly
     target_url = f"{base_url}/user/{user_id}/details"
@@ -54,7 +70,16 @@ def get_user_profile_data(user_id: str) -> dict:
     except Exception as e:
         return {"error": f"Error connecting to backend: {e}"}
 
-def set_user_karma(user_id: str, score: int) -> dict:
+def set_user_karma(user_id: str, score: int) -> Dict[str, Any]:
+    """Sets the karma score for a user via the model API.
+
+    Args:
+        user_id: The unique identifier of the user.
+        score: The new karma score to set.
+
+    Returns:
+        A dictionary containing the API response or an error message.
+    """
     __API = os.getenv("MODEL_API", "http://127.0.0.1:8119/chat/")
     base_url = __API.split("/chat")[0]
     target_url = f"{base_url}/user/{user_id}/karma"

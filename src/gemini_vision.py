@@ -1,25 +1,42 @@
 import os
 import base64
+from typing import Optional, Dict, List, Any
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from config import VISION_MODEL_NAME
 
 load_dotenv()
 
-def _get_client():
+def _get_client() -> Optional[genai.Client]:
+    """Initializes and returns the Gemini client using the API key from environment variables.
+
+    Returns:
+        Optional[genai.Client]: The initialized Gemini client, or None if the API key is missing.
+    """
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         print("GOOGLE_API_KEY not found.")
         return None
     return genai.Client(api_key=api_key)
 
-def _generate_content(contents, prompt_desc):
+def _generate_content(contents: List[types.Content], prompt_desc: str) -> Optional[Dict[str, Any]]:
+    """Internal helper to generate image content using the Gemini API.
+
+    Args:
+        contents: A list of Content objects to send to the model.
+        prompt_desc: A description of the prompt for logging purposes.
+
+    Returns:
+        Optional[Dict[str, Any]]: A dictionary containing the generated image(s) or an error message.
+            Returns None if the client cannot be initialized.
+    """
     client = _get_client()
     if not client: 
         return None
 
     # Using the specific model requested by user
-    model = "gemini-3-pro-image-preview"
+    model = VISION_MODEL_NAME
 
     # Configure for Image generation
     generate_content_config = types.GenerateContentConfig(
@@ -78,9 +95,15 @@ def _generate_content(contents, prompt_desc):
         print(f"Error calling Gemini: {e}")
         return {"error": str(e)}
 
-def generate_image(prompt: str, **kwargs):
-    """
-    Generates a new image based on text prompt.
+def generate_image(prompt: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    """Generates a new image based on a text prompt.
+
+    Args:
+        prompt: The text description of the image to generate.
+        **kwargs: Arbitrary keyword arguments (unused but accepted for compatibility).
+
+    Returns:
+        Optional[Dict[str, Any]]: A dictionary containing the generated image(s) or an error message.
     """
     contents = [
         types.Content(
@@ -92,9 +115,16 @@ def generate_image(prompt: str, **kwargs):
     ]
     return _generate_content(contents, f"Generate: {prompt}")
 
-def edit_image(base64_images: list[str], prompt: str, **kwargs):
-    """
-    Edits existing image(s) based on text prompt.
+def edit_image(base64_images: List[str], prompt: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    """Edits existing image(s) based on a text prompt.
+
+    Args:
+        base64_images: A list of base64-encoded strings representing the images to edit.
+        prompt: The text instructions for editing the image.
+        **kwargs: Arbitrary keyword arguments (unused but accepted for compatibility).
+
+    Returns:
+        Optional[Dict[str, Any]]: A dictionary containing the generated/edited image(s) or an error message.
     """
     parts = [types.Part.from_text(text=prompt)]
     

@@ -11,7 +11,8 @@ from config import (
     NAME,
     CONTEXT_LENGTH_TEXT,
     MAX_USER_INPUT_IMAGES,
-    MAX_TOKENS_RESPONSE
+    MAX_TOKENS_RESPONSE,
+    MODEL_NAME
 )
 from src.gemini_vision import generate_image, edit_image
 from src.components.common import log
@@ -25,15 +26,15 @@ init(autoreset=True)
 load_dotenv()
 
 class Multimodal:
-    def __init__(self, debug: bool = False):
-        """
-        Initializes the multimodal agent using OpenAI-compatible Gemini API.
+    def __init__(self, debug: bool = False) -> None:
+        """Initializes the multimodal agent using OpenAI-compatible Gemini API.
+
         Args:
-            debug (bool): If True, prints verbose debug information.
+            debug: If True, prints verbose debug information.
         """
         self.debug = debug
         self.api_key = os.getenv("GOOGLE_API_KEY")
-        self.model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+        self.model_name = MODEL_NAME
         
         self.client = OpenAI(
             api_key=self.api_key,
@@ -61,6 +62,20 @@ class Multimodal:
         return text.strip()
 
     def generate_response(self, text: str, image_paths: List[str] = [], user_id: str = "default_user", username: str = None, is_mentioned: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Generates a response to the user's input, handling text, images, and context.
+
+        Args:
+            text: The user's input text.
+            image_paths: List of file paths to images included in the user's message.
+            user_id: Unique identifier for the user.
+            username: The display name of the user.
+            is_mentioned: Whether the bot was explicitly mentioned in the message.
+
+        Returns:
+            A tuple containing:
+            - A dictionary with the 'response' text and optional 'img' (base64).
+            - A dictionary containing background data for memory processing.
+        """
         if username:
             self.history_manager.set_username(user_id, username)
 
@@ -295,9 +310,11 @@ class Multimodal:
             
         return result, background_data
 
-    def save_memory_background(self, data: Dict[str, Any]):
-        """
-        Performs background tasks: Saving history, extracting memories, and updating summary.
+    def save_memory_background(self, data: Dict[str, Any]) -> None:
+        """Performs background tasks: Saving history, extracting memories, and updating summary.
+
+        Args:
+            data: A dictionary containing 'user_id', 'text', 'final_reply', and 'input_image_disk_paths'.
         """
         user_id = data.get("user_id")
         text = data.get("text")

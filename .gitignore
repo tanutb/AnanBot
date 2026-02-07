@@ -5,3 +5,8 @@
 .vscode/settings.json
 *.jpg
 *.png
+/packaging
+build_deb.sh
+*.skill
+/code-reviewer
+/document-creator

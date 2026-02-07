@@ -2,9 +2,14 @@
 DISCORD_TOKEN = '<API_TOKEN>'
 
 ######## MODEL CONFIG ########
+import os
+MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-flash-latest")
+VISION_MODEL_NAME = "gemini-3-pro-image-preview"
+EMBEDDING_MODEL_NAME = "gemini-embedding-001"
+
 CHROMA_DB_PATH = "./memories/chroma.db"
 COLLECTION_NAME = "v02haha"
-HISTORY_MAXLEN = 100
+HISTORY_MAXLEN = 1000
 
 ## CONTEXT_LENGTH_IMAGE is the number of previous images that will be used to generate the response
 CONTEXT_LENGTH_IMAGE = 3
@@ -12,9 +17,9 @@ CONTEXT_LENGTH_TEXT = 5
 MAX_USER_INPUT_IMAGES = 2
 
 ## MAX TOKEN SETTINGS
-MAX_TOKENS_MEMORY = 600    # For memory extraction
-MAX_TOKENS_SUMMARY = 600   # For user summary updates
-MAX_TOKENS_RESPONSE = 600  # For main agent response
+MAX_TOKENS_MEMORY = 1000    # For memory extraction
+MAX_TOKENS_SUMMARY = 1000   # For user summary updates
+MAX_TOKENS_RESPONSE = 1000  # For main agent response
 
 ## NAME is the name of the character that the model will be trained to generate responses for
 NAME = 'NuAnantachai'

@@ -2,7 +2,7 @@ import os
 import hashlib
 import time
 import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional, Any
 
 import chromadb
 from google import genai
@@ -17,11 +17,17 @@ from config import (
     MEMORY_RECALL_COUNT, 
     NAME, 
     MEMORY_PROMPT, 
-    MAX_TOKENS_MEMORY
+    MAX_TOKENS_MEMORY,
+    EMBEDDING_MODEL_NAME
 )
 
 class MemoryEngine:
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False) -> None:
+        """Initializes the MemoryEngine with ChromaDB and GenAI client.
+
+        Args:
+            debug: If True, prints verbose debug information.
+        """
         self.debug = debug
         self.api_key = os.getenv("GOOGLE_API_KEY")
         
@@ -36,12 +42,28 @@ class MemoryEngine:
         self.collection = self.chroma_client.get_or_create_collection(name=COLLECTION_NAME)
 
     def generate_memory_id(self, content: str) -> str:
+        """Generates a unique ID for a memory based on its content using MD5.
+
+        Args:
+            content: The text content of the memory.
+
+        Returns:
+            The MD5 hash of the content.
+        """
         return hashlib.md5(content.encode('utf-8')).hexdigest()
 
     def get_embedding(self, text: str) -> List[float]:
+        """Generates a vector embedding for the given text.
+
+        Args:
+            text: The input text to embed.
+
+        Returns:
+            A list of floats representing the embedding vector. Returns an empty list on failure.
+        """
         try:
             result = self.genai_client.models.embed_content(
-                model="text-embedding-004",
+                model=EMBEDDING_MODEL_NAME,
                 contents=text,
                 config=types.EmbedContentConfig(output_dimensionality=768)
             )
@@ -51,6 +73,15 @@ class MemoryEngine:
             return []
 
     def retrieve_context(self, query: str, user_id: str) -> str:
+        """Retrieves relevant memories for a user based on a query.
+
+        Args:
+            query: The search query (usually the user's latest message).
+            user_id: The unique identifier of the user.
+
+        Returns:
+            A formatted string containing relevant memories, or an empty string if none found.
+        """
         log("RAG", f"Querying memory for: '{query}'", Fore.CYAN, debug=self.debug)
         embedding = self.get_embedding(query)
         if not embedding:
@@ -113,6 +144,14 @@ class MemoryEngine:
         return context_str
 
     def parse_memories(self, text: str) -> List[Dict[str, str]]:
+        """Parses the raw text output from the memory extraction model.
+
+        Args:
+            text: The raw text containing generated memories.
+
+        Returns:
+            A list of dictionaries, each with 'qa' and 'answer' keys.
+        """
         if not text:
             return []
         memories = []
@@ -126,7 +165,16 @@ class MemoryEngine:
                     continue
         return memories
 
-    def store_memory(self, client, model_name: str, user_id: str, user_text: str, assistant_response: str):
+    def store_memory(self, client: Any, model_name: str, user_id: str, user_text: str, assistant_response: str) -> None:
+        """Extracts and stores new memories from a conversation turn.
+
+        Args:
+            client: The API client instance used for memory extraction.
+            model_name: The name of the model to use.
+            user_id: The unique identifier of the user.
+            user_text: The user's input text.
+            assistant_response: The assistant's response text.
+        """
         if len(user_text.strip()) < 3:
              log("MEMORY", "Skipping memory extraction for short input.", Fore.YELLOW)
              return
