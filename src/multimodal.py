@@ -377,3 +377,23 @@ class Multimodal:
             result["img"] = img_response
             
         return result, background_data
+
+    def save_memory_background(self, data: Dict[str, Any]) -> None:
+        """Performs background tasks: Saving history, extracting memories, and updating summary.
+
+        Args:
+            data: A dictionary containing 'user_id', 'text', 'final_reply', and 'input_image_disk_paths'.
+        """
+        user_id = data.get("user_id")
+        text = data.get("text")
+        final_reply = data.get("final_reply")
+        input_image_disk_paths = data.get("input_image_disk_paths", [])
+
+        self.history_manager.save()
+        
+        image_note = ""
+        if input_image_disk_paths:
+            image_note = f" [User sent images: {', '.join(input_image_disk_paths)}]"
+            
+        self.memory_engine.store_memory(self.client, self.model_name, user_id, text + image_note, final_reply)
+        self.karma_manager.update_user_summary(self.client, self.model_name, user_id, text, final_reply)
