@@ -61,13 +61,14 @@ class Multimodal:
         text = re.sub(r'\(?Karma:\s*-?\d+\)?', '', text, flags=re.IGNORECASE)
         return text.strip()
 
-    def generate_response(self, text: str, image_paths: List[str] = [], user_id: str = "default_user", username: str = None, is_mentioned: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def generate_response(self, text: str, image_paths: List[str] = [], user_id: str = "default_user", context_id: str = None, username: str = None, is_mentioned: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Generates a response to the user's input, handling text, images, and context.
 
         Args:
             text: The user's input text.
             image_paths: List of file paths to images included in the user's message.
-            user_id: Unique identifier for the user.
+            user_id: Unique identifier for the user (for Karma/Persona).
+            context_id: Unique identifier for the conversation context (e.g., Channel ID). Defaults to user_id.
             username: The display name of the user.
             is_mentioned: Whether the bot was explicitly mentioned in the message.
 
@@ -76,15 +77,22 @@ class Multimodal:
             - A dictionary with the 'response' text and optional 'img' (base64).
             - A dictionary containing background data for memory processing.
         """
+        if context_id is None:
+            context_id = user_id
+
         if username:
+            # We track usernames per user_id, but history is per context_id
             self.history_manager.set_username(user_id, username)
 
-        # Get Context
-        history = self.history_manager.get_history(user_id)
+        # Get Context (History uses context_id for shared channel awareness)
+        history = self.history_manager.get_history(context_id)
+        
+        # User Specific Data
         karma_score = self.karma_manager.get_score(user_id)
         user_summary = self.karma_manager.get_info(user_id).get("summary", "No summary yet.")
         
-        # 1. RAG Retrieval
+        # 1. RAG Retrieval (User specific + Context specific?)
+        # For now, retrieve based on user to keep personal memories personal
         context_injection = self.memory_engine.retrieve_context(text, user_id)
         
         # 2. Build Messages
@@ -135,7 +143,10 @@ class Multimodal:
                 messages.append(msg)
             
         user_content = []
-        user_content.append({"type": "text", "text": text})
+        
+        # Prepend Username to text for shared context clarity
+        display_text = f"[{username}]: {text}" if username else text
+        user_content.append({"type": "text", "text": display_text})
         
         base64_input_images = []
         input_image_disk_paths = []
@@ -149,7 +160,8 @@ class Multimodal:
                     base64_input_images.append(b64)
                     saved_path = self.image_handler.save_image_to_disk(b64)
                     input_image_disk_paths.append(saved_path)
-                    self.history_manager.update_last_images(user_id, saved_path)
+                    # Update LAST IMAGES for the CONTEXT (Channel), not just the user
+                    self.history_manager.update_last_images(context_id, saved_path)
                     
                     user_content.append({
                         "type": "image_url",
@@ -220,7 +232,8 @@ class Multimodal:
                     if gen_res and 'images' in gen_res:
                         img_response = gen_res['images'][0]
                         saved_path = self.image_handler.save_image_to_disk(img_response)
-                        self.history_manager.update_last_images(user_id, saved_path)
+                        # Shared Context Update
+                        self.history_manager.update_last_images(context_id, saved_path)
                     elif gen_res and 'error' in gen_res:
                         final_reply += f"\n[System: Image generation failed. Reason: {gen_res['error']}]"
                     else:
@@ -241,12 +254,11 @@ class Multimodal:
                 if base64_input_images:
                     target_images_b64.extend(base64_input_images)
                 
-                # 2. Add Recent History (Context)
-                # We always add history so the model can choose between editing the upload OR the previous generation
-                # Limit total to 3 to avoid payload size issues
+                # 2. Add Recent History (Context - SHARED)
+                # Use context_id to retrieve images from ANYONE in the channel
                 slots_left = 3 - len(target_images_b64)
                 if slots_left > 0:
-                    last_paths = self.history_manager.get_last_images(user_id)
+                    last_paths = self.history_manager.get_last_images(context_id)
                     paths_to_load = last_paths[-slots_left:] 
                     for p in paths_to_load:
                         b64 = self.image_handler.load_image_from_disk(p)
@@ -259,7 +271,8 @@ class Multimodal:
                         if gen_res and 'images' in gen_res:
                             img_response = gen_res['images'][0]
                             saved_path = self.image_handler.save_image_to_disk(img_response)
-                            self.history_manager.update_last_images(user_id, saved_path)
+                            # Shared Context Update
+                            self.history_manager.update_last_images(context_id, saved_path)
                         elif gen_res and 'error' in gen_res:
                              final_reply += f"\n[System: Image edit failed. Reason: {gen_res['error']}]"
                         else:
@@ -283,22 +296,23 @@ class Multimodal:
                 # Or if the logic above missed something.
                 final_reply = "What?"
 
-        # 5. Update History
+        # 5. Update History (Shared Context)
         user_msg_content = []
-        user_msg_content.append({"type": "text", "text": text})
+        user_msg_content.append({"type": "text", "text": display_text})
         for p in input_image_disk_paths:
              user_msg_content.append({"type": "image_url", "image_url": {"url": p}})
 
-        self.history_manager.add_message(user_id, "user", user_msg_content)
+        self.history_manager.add_message(context_id, "user", user_msg_content)
         
         assistant_text = final_reply
         if img_response:
              assistant_text += "\n[Generated Image]"
-        self.history_manager.add_message(user_id, "assistant", assistant_text)
+        self.history_manager.add_message(context_id, "assistant", assistant_text)
         
         # Prepare Background Data
         background_data = {
             "user_id": user_id,
+            "context_id": context_id, # Pass context_id for saving
             "text": text,
             "final_reply": final_reply,
             "input_image_disk_paths": input_image_disk_paths

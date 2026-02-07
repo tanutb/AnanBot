@@ -38,23 +38,44 @@ client = AnanBotClient()
 async def send_message(message: Message, user_message: str, is_mentioned: bool) -> None:
     user_id = str(message.author.id)
     username = str(message.author.display_name)
+    context_id = str(message.channel.id)
 
     try:
         image_paths = []
+        
+        # 1. Handle Reply Context (Images & Text)
+        reply_context = ""
+        if message.reference and message.reference.resolved:
+            ref_msg = message.reference.resolved
+            if isinstance(ref_msg, Message):
+                reply_context = f"[Replying to {ref_msg.author.display_name}: \"{ref_msg.content}\"]\n"
+                
+                # Process images from the replied message
+                if ref_msg.attachments:
+                    for attachment in ref_msg.attachments:
+                        if attachment.filename.lower().endswith(('png', 'jpg', 'jpeg')):
+                            path = f"./downloads/{attachment.filename}"
+                            # Only add if not already downloaded (or re-download to be safe/simple)
+                            if not os.path.exists(path):
+                                await attachment.save(path)
+                            image_paths.append(path)
+
+        # 2. Handle Current Message Images
         if message.attachments:
             for attachment in message.attachments:
                 if attachment.filename.lower().endswith(('png', 'jpg', 'jpeg')):
                     path = f"./downloads/{attachment.filename}"
                     image_paths.append(path)
         
-        mtext = user_message
-        if image_paths and not user_message:
+        mtext = reply_context + user_message
+        if image_paths and not user_message and not reply_context:
              mtext = "What is this image about?"
              
         chat_request = ChatRequest(
             text=mtext, 
             image_paths=image_paths, 
             user_id=user_id,
+            context_id=context_id,
             username=username,
             is_mentioned=is_mentioned
         )

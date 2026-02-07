@@ -28,6 +28,9 @@ def get_response(request: ChatRequest) -> Union[Dict[str, Any], str]:
     
     if request.username:
         data["username"] = request.username
+
+    if request.context_id:
+        data["context_id"] = request.context_id
         
     if request.image_paths:
         data["image_paths"] = request.image_paths

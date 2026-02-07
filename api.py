@@ -26,13 +26,15 @@ async def chat_endpoint(request: utils.ChatRequest, background_tasks: Background
     text = request.text
     image_paths = request.image_paths
     user_id = request.user_id
+    context_id = request.context_id
     username = request.username
     is_mentioned = request.is_mentioned
     
     response, bg_data = MultiModal.generate_response(
         text, 
         image_paths, 
-        user_id=user_id, 
+        user_id=user_id,
+        context_id=context_id,
         username=username, 
         is_mentioned=is_mentioned
     )
