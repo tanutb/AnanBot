@@ -63,36 +63,46 @@ def _generate_content(contents: List[types.Content], prompt_desc: str) -> Option
     try:
         generated_image_b64 = None
         text_response = ""
+        finish_reason = "UNKNOWN"
         
         for chunk in client.models.generate_content_stream(
             model=model,
             contents=contents,
             config=generate_content_config,
         ):
-            if (
-                chunk.candidates is None
-                or not chunk.candidates
-                or chunk.candidates[0].content is None
-                or chunk.candidates[0].content.parts is None
-            ):
-                continue
-            
-            for part in chunk.candidates[0].content.parts:
-                if part.text:
-                    text_response += part.text
-                if part.inline_data and part.inline_data.data:
-                    image_bytes = part.inline_data.data
-                    generated_image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-                    # If we found an image, we can stop looking (unless we want multi-image)
+            try:
+                if chunk.candidates and chunk.candidates[0].finish_reason:
+                    finish_reason = chunk.candidates[0].finish_reason
+
+                if (
+                    chunk.candidates is None
+                    or not chunk.candidates
+                    or chunk.candidates[0].content is None
+                    or chunk.candidates[0].content.parts is None
+                ):
+                    continue
+                
+                for part in chunk.candidates[0].content.parts:
+                    if part.text:
+                        text_response += part.text
+                    if part.inline_data and part.inline_data.data:
+                        image_bytes = part.inline_data.data
+                        generated_image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+                        # If we found an image, we can stop looking (unless we want multi-image)
+                        break
+                
+                if generated_image_b64:
                     break
-            
-            if generated_image_b64:
-                break
+            except Exception as inner_e:
+                print(f"Error processing chunk: {inner_e}")
+                # Continue to next chunk if one fails, or break? Usually break.
+                continue
 
         if generated_image_b64:
             return {"images": [generated_image_b64]}
         else:
-            error_msg = text_response.strip() if text_response else "No image data found in Gemini response."
+            base_msg = text_response.strip() if text_response else "No image data found."
+            error_msg = f"{base_msg} (Finish Reason: {finish_reason})"
             print(f"Generation failed. Model response: {error_msg}")
             return {"error": error_msg}
 
